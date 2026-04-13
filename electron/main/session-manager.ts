@@ -1,4 +1,5 @@
 import type { ConnectionStore } from './connection-store.js'
+import type { InstanceStateCache } from './instance-state-cache.js'
 import type {
   PostgresConnectRequest,
   PostgresDriver,
@@ -9,6 +10,7 @@ import type {
   SessionSnapshot,
 } from '../shared/contracts/session.js'
 import {
+  createAppError,
   notFoundError,
   toAppError,
   type AppError,
@@ -26,6 +28,7 @@ export type SessionManager = {
 
 type SessionManagerDependencies = {
   connectionStore: ConnectionStore
+  instanceStateCache: InstanceStateCache
   postgresDriver: PostgresDriver
 }
 
@@ -46,6 +49,7 @@ function cloneError(error: AppError | null) {
 
 export function createSessionManager({
   connectionStore,
+  instanceStateCache,
   postgresDriver,
 }: SessionManagerDependencies): SessionManager {
   let currentSession: ConnectionSession | null = null
@@ -95,7 +99,7 @@ export function createSessionManager({
     } catch (error) {
       logger.warn('Failed to close PostgreSQL session cleanly.', {
         error,
-        profileId: session.profileId,
+        sourceId: session.sourceId,
       })
     }
   }
@@ -111,6 +115,50 @@ export function createSessionManager({
       active: null,
       error: null,
     })
+  }
+
+  function createConnectRequest(
+    request: SessionConnectRequest
+  ): PostgresConnectRequest {
+    if (request.targetKind === 'manual') {
+      const source = connectionStore.getManualById(request.sourceId)
+
+      if (!source) {
+        throw notFoundError('Manual connection source was not found.', {
+          sourceId: request.sourceId,
+        })
+      }
+
+      return {
+        source,
+        password: request.password,
+      }
+    }
+
+    const source = connectionStore.getInstanceById(request.sourceId)
+
+    if (!source) {
+      throw notFoundError('PostgreSQL instance source was not found.', {
+        sourceId: request.sourceId,
+      })
+    }
+
+    const instanceState = instanceStateCache.get(request.sourceId)
+
+    if (!instanceState?.password) {
+      throw createAppError({
+        code: 'CONNECTION_ERROR',
+        message: 'A password is required before connecting to this instance.',
+        cause: 'PASSWORD_REQUIRED',
+        retryable: false,
+      })
+    }
+
+    return {
+      source,
+      database: request.database,
+      password: instanceState.password,
+    }
   }
 
   return {
@@ -132,21 +180,7 @@ export function createSessionManager({
       }
     },
     async connect(request) {
-      const profile = connectionStore.getById(request.profileId)
       const previousSession = currentSession
-
-      if (!profile) {
-        const error = notFoundError('Connection profile was not found.', {
-          profileId: request.profileId,
-        })
-
-        setState({
-          status: previousSession ? 'connected' : 'error',
-          active: cloneSession(previousSession),
-          error,
-        })
-        throw error
-      }
 
       setState({
         status: 'connecting',
@@ -154,13 +188,10 @@ export function createSessionManager({
         error: null,
       })
 
-      const connectRequest: PostgresConnectRequest = {
-        profile,
-        password: request.password,
-      }
-
       try {
-        const nextSession = await postgresDriver.connect(connectRequest)
+        const nextSession = await postgresDriver.connect(
+          createConnectRequest(request)
+        )
 
         currentSession = nextSession
         await closeSession(previousSession)

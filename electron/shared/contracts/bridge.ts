@@ -1,9 +1,15 @@
 import type {
-  ConnectionProfileDraft,
   ConnectionTestRequest,
   ConnectionTestResult,
-  StoredConnectionProfile,
-  UpdateConnectionProfileRequest,
+  InstanceConnectionDraft,
+  InstanceDiscoveryRequest,
+  InstanceDiscoveryResult,
+  ManualConnectionDraft,
+  SavedConnectionSource,
+  UpdateInstanceConnectionRequest,
+  UpdateManualConnectionRequest,
+  StoredInstanceConnectionSource,
+  StoredManualConnectionSource,
 } from './connections.js'
 import type {
   AppPreferences,
@@ -43,10 +49,13 @@ export const IPC_CHANNELS = {
   },
   connections: {
     list: 'connections:list',
-    save: 'connections:save',
-    update: 'connections:update',
+    saveManual: 'connections:save-manual',
+    updateManual: 'connections:update-manual',
+    saveInstance: 'connections:save-instance',
+    updateInstance: 'connections:update-instance',
     remove: 'connections:remove',
-    test: 'connections:test',
+    testManual: 'connections:test-manual',
+    discoverInstance: 'connections:discover-instance',
   },
   session: {
     getActive: 'session:get-active',
@@ -80,17 +89,26 @@ export type RowlyBridge = {
     set: (patch: AppPreferencesPatch) => Promise<IpcResult<AppPreferences>>
   }
   connections: {
-    list: () => Promise<IpcResult<StoredConnectionProfile[]>>
-    save: (
-      draft: ConnectionProfileDraft
-    ) => Promise<IpcResult<StoredConnectionProfile>>
-    update: (
-      request: UpdateConnectionProfileRequest
-    ) => Promise<IpcResult<StoredConnectionProfile>>
-    remove: (profileId: string) => Promise<IpcResult<StoredConnectionProfile>>
-    test: (
+    list: () => Promise<IpcResult<SavedConnectionSource[]>>
+    saveManual: (
+      draft: ManualConnectionDraft
+    ) => Promise<IpcResult<StoredManualConnectionSource>>
+    updateManual: (
+      request: UpdateManualConnectionRequest
+    ) => Promise<IpcResult<StoredManualConnectionSource>>
+    saveInstance: (
+      draft: InstanceConnectionDraft
+    ) => Promise<IpcResult<StoredInstanceConnectionSource>>
+    updateInstance: (
+      request: UpdateInstanceConnectionRequest
+    ) => Promise<IpcResult<StoredInstanceConnectionSource>>
+    remove: (sourceId: string) => Promise<IpcResult<SavedConnectionSource>>
+    testManual: (
       request: ConnectionTestRequest
     ) => Promise<IpcResult<ConnectionTestResult>>
+    discoverInstance: (
+      request: InstanceDiscoveryRequest
+    ) => Promise<IpcResult<InstanceDiscoveryResult>>
   }
   session: {
     getActive: () => Promise<IpcResult<ConnectionSession | null>>

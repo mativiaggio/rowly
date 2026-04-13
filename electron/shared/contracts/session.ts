@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 import type { AppError } from '../lib/errors.js'
 import {
-  connectionProfileIdSchema,
+  connectionSourceIdSchema,
   secretStringSchema,
 } from './connections.js'
 import { isAppError } from '../lib/errors.js'
@@ -17,8 +17,11 @@ export const sessionStatusSchema = z.enum([
   'error',
 ])
 
+export const sessionSourceKindSchema = z.enum(['manual', 'instance'])
+
 export const connectionSessionSchema = z.object({
-  profileId: connectionProfileIdSchema,
+  sourceId: connectionSourceIdSchema,
+  sourceKind: sessionSourceKindSchema,
   database: sessionTextSchema,
   user: sessionTextSchema,
   host: sessionTextSchema,
@@ -26,10 +29,22 @@ export const connectionSessionSchema = z.object({
   status: z.literal('connected'),
 })
 
-export const sessionConnectRequestSchema = z.object({
-  profileId: connectionProfileIdSchema,
+const manualSessionConnectRequestSchema = z.object({
+  targetKind: z.literal('manual'),
+  sourceId: connectionSourceIdSchema,
   password: secretStringSchema,
 })
+
+const instanceDatabaseConnectRequestSchema = z.object({
+  targetKind: z.literal('instanceDatabase'),
+  sourceId: connectionSourceIdSchema,
+  database: sessionTextSchema,
+})
+
+export const sessionConnectRequestSchema = z.discriminatedUnion('targetKind', [
+  manualSessionConnectRequestSchema,
+  instanceDatabaseConnectRequestSchema,
+])
 
 export const sessionSnapshotSchema = z.object({
   status: sessionStatusSchema,
@@ -38,6 +53,7 @@ export const sessionSnapshotSchema = z.object({
 })
 
 export type SessionStatus = z.infer<typeof sessionStatusSchema>
+export type SessionSourceKind = z.infer<typeof sessionSourceKindSchema>
 export type ConnectionSession = z.infer<typeof connectionSessionSchema>
 export type SessionConnectRequest = z.infer<typeof sessionConnectRequestSchema>
 export type SessionSnapshot = z.infer<typeof sessionSnapshotSchema>

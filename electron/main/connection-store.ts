@@ -1,19 +1,38 @@
 import { randomUUID } from 'node:crypto'
 
 import type {
-  ConnectionProfileDraft,
-  StoredConnectionProfile,
-  UpdateConnectionProfileRequest,
+  InstanceConnectionDraft,
+  ManualConnectionDraft,
+  SavedConnectionSource,
+  StoredInstanceConnectionSource,
+  StoredManualConnectionSource,
+  UpdateInstanceConnectionRequest,
+  UpdateManualConnectionRequest,
 } from '../shared/contracts/connections.js'
 import { notFoundError } from '../shared/lib/errors.js'
 import type { LocalStateStore } from './local-state-store.js'
 
 export type ConnectionStore = {
-  list: () => StoredConnectionProfile[]
-  save: (draft: ConnectionProfileDraft) => StoredConnectionProfile
-  update: (request: UpdateConnectionProfileRequest) => StoredConnectionProfile
-  remove: (profileId: string) => StoredConnectionProfile
-  getById: (profileId: string) => StoredConnectionProfile | null
+  list: () => SavedConnectionSource[]
+  saveManual: (draft: ManualConnectionDraft) => StoredManualConnectionSource
+  updateManual: (
+    request: UpdateManualConnectionRequest
+  ) => StoredManualConnectionSource
+  saveInstance: (
+    draft: InstanceConnectionDraft
+  ) => StoredInstanceConnectionSource
+  updateInstance: (
+    request: UpdateInstanceConnectionRequest
+  ) => StoredInstanceConnectionSource
+  remove: (sourceId: string) => SavedConnectionSource
+  getManualById: (sourceId: string) => StoredManualConnectionSource | null
+  getInstanceById: (sourceId: string) => StoredInstanceConnectionSource | null
+}
+
+function sortSources(sources: SavedConnectionSource[]) {
+  return [...sources].sort((left, right) =>
+    left.createdAt.localeCompare(right.createdAt)
+  )
 }
 
 export function createConnectionStore(
@@ -21,14 +40,13 @@ export function createConnectionStore(
 ): ConnectionStore {
   return {
     list() {
-      return [...localStateStore.get().profiles].sort((left, right) =>
-        left.createdAt.localeCompare(right.createdAt)
-      )
+      return sortSources(localStateStore.get().sources)
     },
-    save(draft) {
+    saveManual(draft) {
       const timestamp = new Date().toISOString()
-      const profile: StoredConnectionProfile = {
+      const source: StoredManualConnectionSource = {
         ...draft,
+        kind: 'manual',
         id: randomUUID(),
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -36,62 +54,116 @@ export function createConnectionStore(
 
       localStateStore.update((currentState) => ({
         ...currentState,
-        profiles: [...currentState.profiles, profile],
+        sources: [...currentState.sources, source],
       }))
 
-      return profile
+      return source
     },
-    update(request) {
-      const existingProfile = localStateStore
-        .get()
-        .profiles.find((profile) => profile.id === request.id)
+    updateManual(request) {
+      const existingSource = this.getManualById(request.id)
 
-      if (!existingProfile) {
-        throw notFoundError('Connection profile was not found.', {
-          profileId: request.id,
+      if (!existingSource) {
+        throw notFoundError('Manual connection source was not found.', {
+          sourceId: request.id,
         })
       }
 
-      const nextProfile: StoredConnectionProfile = {
+      const nextSource: StoredManualConnectionSource = {
         ...request.draft,
-        id: existingProfile.id,
-        createdAt: existingProfile.createdAt,
+        kind: 'manual',
+        id: existingSource.id,
+        createdAt: existingSource.createdAt,
         updatedAt: new Date().toISOString(),
       }
 
       localStateStore.update((currentState) => ({
         ...currentState,
-        profiles: currentState.profiles.map((profile) =>
-          profile.id === request.id ? nextProfile : profile
+        sources: currentState.sources.map((source) =>
+          source.id === request.id ? nextSource : source
         ),
       }))
 
-      return nextProfile
+      return nextSource
     },
-    remove(profileId) {
-      const existingProfile = localStateStore
-        .get()
-        .profiles.find((profile) => profile.id === profileId)
+    saveInstance(draft) {
+      const timestamp = new Date().toISOString()
+      const source: StoredInstanceConnectionSource = {
+        ...draft,
+        kind: 'instance',
+        id: randomUUID(),
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }
 
-      if (!existingProfile) {
-        throw notFoundError('Connection profile was not found.', {
-          profileId,
+      localStateStore.update((currentState) => ({
+        ...currentState,
+        sources: [...currentState.sources, source],
+      }))
+
+      return source
+    },
+    updateInstance(request) {
+      const existingSource = this.getInstanceById(request.id)
+
+      if (!existingSource) {
+        throw notFoundError('PostgreSQL instance source was not found.', {
+          sourceId: request.id,
+        })
+      }
+
+      const nextSource: StoredInstanceConnectionSource = {
+        ...request.draft,
+        kind: 'instance',
+        id: existingSource.id,
+        createdAt: existingSource.createdAt,
+        updatedAt: new Date().toISOString(),
+      }
+
+      localStateStore.update((currentState) => ({
+        ...currentState,
+        sources: currentState.sources.map((source) =>
+          source.id === request.id ? nextSource : source
+        ),
+      }))
+
+      return nextSource
+    },
+    remove(sourceId) {
+      const existingSource =
+        localStateStore.get().sources.find((source) => source.id === sourceId) ??
+        null
+
+      if (!existingSource) {
+        throw notFoundError('Connection source was not found.', {
+          sourceId,
         })
       }
 
       localStateStore.update((currentState) => ({
         ...currentState,
-        profiles: currentState.profiles.filter((profile) => profile.id !== profileId),
+        sources: currentState.sources.filter((source) => source.id !== sourceId),
       }))
 
-      return existingProfile
+      return existingSource
     },
-    getById(profileId) {
-      return (
+    getManualById(sourceId) {
+      const source =
         localStateStore
           .get()
-          .profiles.find((profile) => profile.id === profileId) ?? null
-      )
+          .sources.find((entry) => entry.id === sourceId && entry.kind === 'manual') ??
+        null
+
+      return source && source.kind === 'manual' ? source : null
+    },
+    getInstanceById(sourceId) {
+      const source =
+        localStateStore
+          .get()
+          .sources.find(
+            (entry) => entry.id === sourceId && entry.kind === 'instance'
+          ) ?? null
+
+      return source && source.kind === 'instance' ? source : null
     },
   }
 }

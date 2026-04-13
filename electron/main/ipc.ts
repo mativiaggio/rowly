@@ -3,10 +3,13 @@ import type { ZodType } from 'zod'
 
 import { IPC_CHANNELS } from '../shared/contracts/bridge.js'
 import {
-  connectionProfileDraftSchema,
-  connectionProfileIdSchema,
+  connectionSourceIdSchema,
   connectionTestRequestSchema,
-  updateConnectionProfileRequestSchema,
+  instanceConnectionDraftSchema,
+  instanceDiscoveryRequestSchema,
+  manualConnectionDraftSchema,
+  updateInstanceConnectionRequestSchema,
+  updateManualConnectionRequestSchema,
 } from '../shared/contracts/connections.js'
 import { appPreferencesPatchSchema } from '../shared/contracts/preferences.js'
 import { executeQueryRequestSchema } from '../shared/contracts/query.js'
@@ -16,7 +19,7 @@ import {
 } from '../shared/contracts/schema.js'
 import { sessionConnectRequestSchema } from '../shared/contracts/session.js'
 import { tablePreviewRequestSchema } from '../shared/contracts/tables.js'
-import { toAppError, validationError } from '../shared/lib/errors.js'
+import { createAppError, toAppError, validationError } from '../shared/lib/errors.js'
 import { createLogger } from '../shared/lib/logger.js'
 import { fail, ok } from '../shared/lib/result.js'
 import type { MainRuntime } from './runtime.js'
@@ -89,6 +92,7 @@ function registerInputHandler<TInput, TOutput>(
 
 export function registerIpcHandlers({
   connectionStore,
+  instanceStateCache,
   preferencesStore,
   postgresDriver,
   sessionManager,
@@ -111,38 +115,106 @@ export function registerIpcHandlers({
 
   registerNoArgHandler(IPC_CHANNELS.connections.list, () => connectionStore.list())
   registerInputHandler(
-    IPC_CHANNELS.connections.save,
-    connectionProfileDraftSchema,
-    (draft) => connectionStore.save(draft)
+    IPC_CHANNELS.connections.saveManual,
+    manualConnectionDraftSchema,
+    (draft) => connectionStore.saveManual(draft)
   )
   registerInputHandler(
-    IPC_CHANNELS.connections.update,
-    updateConnectionProfileRequestSchema,
-    (request) => connectionStore.update(request)
+    IPC_CHANNELS.connections.updateManual,
+    updateManualConnectionRequestSchema,
+    (request) => connectionStore.updateManual(request)
   )
   registerInputHandler(
-    IPC_CHANNELS.connections.remove,
-    connectionProfileIdSchema,
-    async (profileId) => {
-      if (sessionManager.getState().active?.profileId === profileId) {
-        await sessionManager.disconnect()
-      }
-
-      const removedProfile = connectionStore.remove(profileId)
-
-      if (preferencesStore.get().lastSelectedProfileId === profileId) {
-        preferencesStore.set({
-          lastSelectedProfileId: null,
-        })
-      }
-
-      return removedProfile
+    IPC_CHANNELS.connections.saveInstance,
+    instanceConnectionDraftSchema,
+    (draft) => connectionStore.saveInstance(draft)
+  )
+  registerInputHandler(
+    IPC_CHANNELS.connections.updateInstance,
+    updateInstanceConnectionRequestSchema,
+    (request) => {
+      instanceStateCache.clear(request.id)
+      return connectionStore.updateInstance(request)
     }
   )
   registerInputHandler(
-    IPC_CHANNELS.connections.test,
+    IPC_CHANNELS.connections.remove,
+    connectionSourceIdSchema,
+    async (sourceId) => {
+      if (sessionManager.getState().active?.sourceId === sourceId) {
+        await sessionManager.disconnect()
+      }
+
+      instanceStateCache.clear(sourceId)
+      const removedSource = connectionStore.remove(sourceId)
+
+      const currentPreferences = preferencesStore.get()
+      const nextPreferencesPatch = {
+        lastSelectedProfileId:
+          currentPreferences.lastSelectedProfileId === sourceId
+            ? null
+            : currentPreferences.lastSelectedProfileId,
+        lastSelectedTarget:
+          currentPreferences.lastSelectedTarget?.sourceId === sourceId
+            ? null
+            : currentPreferences.lastSelectedTarget,
+      }
+
+      preferencesStore.set(nextPreferencesPatch)
+
+      return removedSource
+    }
+  )
+  registerInputHandler(
+    IPC_CHANNELS.connections.testManual,
     connectionTestRequestSchema,
     (request) => postgresDriver.testConnection(request)
+  )
+  registerInputHandler(
+    IPC_CHANNELS.connections.discoverInstance,
+    instanceDiscoveryRequestSchema,
+    async (request) => {
+      const source = connectionStore.getInstanceById(request.sourceId)
+
+      if (!source) {
+        throw createAppError({
+          code: 'NOT_FOUND',
+          message: 'PostgreSQL instance source was not found.',
+          cause: 'SOURCE_NOT_FOUND',
+          retryable: false,
+        })
+      }
+
+      const cachedState = instanceStateCache.get(request.sourceId)
+      const password = request.password ?? cachedState?.password
+
+      if (!password) {
+        throw createAppError({
+          code: 'CONNECTION_ERROR',
+          message: 'A password is required to discover databases for this instance.',
+          cause: 'PASSWORD_REQUIRED',
+          retryable: false,
+        })
+      }
+
+      const databases = await postgresDriver.listDatabases({
+        source,
+        password,
+      })
+      const discoveredAt = new Date().toISOString()
+
+      instanceStateCache.set(request.sourceId, {
+        password,
+        databases,
+        discoveredAt,
+      })
+
+      return {
+        sourceId: request.sourceId,
+        databases,
+        discoveredAt,
+      }
+    }
   )
 
   registerNoArgHandler(IPC_CHANNELS.session.getActive, () =>

@@ -22,12 +22,20 @@ const rowlyBridge: RowlyBridge = {
   },
   connections: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.connections.list),
-    save: (draft) => ipcRenderer.invoke(IPC_CHANNELS.connections.save, draft),
-    update: (request) =>
-      ipcRenderer.invoke(IPC_CHANNELS.connections.update, request),
+    saveManual: (draft) =>
+      ipcRenderer.invoke(IPC_CHANNELS.connections.saveManual, draft),
+    updateManual: (request) =>
+      ipcRenderer.invoke(IPC_CHANNELS.connections.updateManual, request),
+    saveInstance: (draft) =>
+      ipcRenderer.invoke(IPC_CHANNELS.connections.saveInstance, draft),
+    updateInstance: (request) =>
+      ipcRenderer.invoke(IPC_CHANNELS.connections.updateInstance, request),
     remove: (profileId) =>
       ipcRenderer.invoke(IPC_CHANNELS.connections.remove, profileId),
-    test: (request) => ipcRenderer.invoke(IPC_CHANNELS.connections.test, request),
+    testManual: (request) =>
+      ipcRenderer.invoke(IPC_CHANNELS.connections.testManual, request),
+    discoverInstance: (request) =>
+      ipcRenderer.invoke(IPC_CHANNELS.connections.discoverInstance, request),
   },
   session: {
     getActive: () => ipcRenderer.invoke(IPC_CHANNELS.session.getActive),

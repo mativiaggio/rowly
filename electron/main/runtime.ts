@@ -1,4 +1,5 @@
 import { createConnectionStore } from './connection-store.js'
+import { createInstanceStateCache } from './instance-state-cache.js'
 import { createLocalStateStore } from './local-state-store.js'
 import { createPostgresDriver } from './postgres-driver.js'
 import { createPreferencesStore } from './preferences-store.js'
@@ -9,10 +10,12 @@ import { createSessionManager } from './session-manager.js'
 export function createMainRuntime() {
   const localStateStore = createLocalStateStore()
   const connectionStore = createConnectionStore(localStateStore)
+  const instanceStateCache = createInstanceStateCache()
   const preferencesStore = createPreferencesStore(localStateStore)
   const postgresDriver = createPostgresDriver()
   const sessionManager = createSessionManager({
     connectionStore,
+    instanceStateCache,
     postgresDriver,
   })
   const schemaService = createSchemaService({
@@ -27,6 +30,7 @@ export function createMainRuntime() {
   return {
     localStateStore,
     connectionStore,
+    instanceStateCache,
     preferencesStore,
     postgresDriver,
     sessionManager,

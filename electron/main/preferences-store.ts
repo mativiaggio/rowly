@@ -28,6 +28,10 @@ export function createPreferencesStore(
             patch.lastSelectedProfileId !== undefined
               ? patch.lastSelectedProfileId
               : currentState.preferences.lastSelectedProfileId,
+          lastSelectedTarget:
+            patch.lastSelectedTarget !== undefined
+              ? patch.lastSelectedTarget
+              : currentState.preferences.lastSelectedTarget,
           panelWidths: {
             sidebar:
               patch.panelWidths?.sidebar ??

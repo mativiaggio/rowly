@@ -3,7 +3,10 @@ import { Client, type ClientConfig } from 'pg'
 import type {
   ConnectionTestRequest,
   ConnectionTestResult,
-  StoredConnectionProfile,
+  DiscoveredDatabase,
+  ManualConnectionDraft,
+  StoredInstanceConnectionSource,
+  StoredManualConnectionSource,
 } from '../shared/contracts/connections.js'
 import type {
   ExecuteQueryRequest,
@@ -29,9 +32,28 @@ import {
 } from '../shared/lib/errors.js'
 
 const CONNECTION_TIMEOUT_MS = 8_000
+const DISCOVERY_CATALOG_DATABASE = 'postgres'
 
-export type PostgresConnectRequest = {
-  profile: StoredConnectionProfile
+type PostgresEndpoint = {
+  host: string
+  port: number
+  user: string
+  ssl: boolean
+}
+
+export type PostgresConnectRequest =
+  | {
+      source: StoredManualConnectionSource
+      password: string
+    }
+  | {
+      source: StoredInstanceConnectionSource
+      database: string
+      password: string
+    }
+
+export type PostgresInstanceDiscoveryRequest = {
+  source: StoredInstanceConnectionSource
   password: string
 }
 
@@ -39,6 +61,9 @@ export type PostgresDriver = {
   testConnection: (
     request: ConnectionTestRequest
   ) => Promise<ConnectionTestResult>
+  listDatabases: (
+    request: PostgresInstanceDiscoveryRequest
+  ) => Promise<DiscoveredDatabase[]>
   connect: (request: PostgresConnectRequest) => Promise<ConnectionSession>
   disconnect: (session: ConnectionSession) => Promise<void>
   getExplorerTree: (session: ConnectionSession) => Promise<SchemaExplorerTree>
@@ -65,6 +90,23 @@ type ConnectionErrorLike = {
   code?: string
   message?: string
   name?: string
+}
+
+type UserTableRow = {
+  schema_name: string
+  table_name: string
+}
+
+type TableColumnRow = {
+  column_name: string
+  data_type: string
+  is_nullable: boolean
+  default_value: string | null
+  is_primary_key: boolean
+}
+
+type DatabaseRow = {
+  name: string
 }
 
 const HOST_UNREACHABLE_CODES = new Set([
@@ -126,34 +168,37 @@ const TABLE_DETAILS_SQL = `
   ORDER BY a.attnum ASC
 `
 
-type UserTableRow = {
-  schema_name: string
-  table_name: string
-}
-
-type TableColumnRow = {
-  column_name: string
-  data_type: string
-  is_nullable: boolean
-  default_value: string | null
-  is_primary_key: boolean
-}
+const LIST_DISCOVERABLE_DATABASES_SQL = `
+  SELECT datname AS name
+  FROM pg_database
+  WHERE datistemplate = false
+    AND datallowconn = true
+    AND has_database_privilege(current_user, datname, 'CONNECT')
+  ORDER BY
+    CASE WHEN datname = 'postgres' THEN 0 ELSE 1 END,
+    datname ASC
+`
 
 function getSessionKey(session: ConnectionSession) {
-  return `${session.profileId}:${session.connectedAt}`
+  return `${session.sourceId}:${session.connectedAt}`
+}
+
+function quoteIdentifier(value: string) {
+  return `"${value.replace(/"/g, '""')}"`
 }
 
 function buildClientConfig(
-  profile: StoredConnectionProfile | ConnectionTestRequest['profile'],
-  password: string
+  endpoint: PostgresEndpoint,
+  password: string,
+  database: string
 ): ClientConfig {
   return {
-    host: profile.host,
-    port: profile.port,
-    database: profile.database,
-    user: profile.user,
+    host: endpoint.host,
+    port: endpoint.port,
+    database,
+    user: endpoint.user,
     password,
-    ssl: profile.ssl ? true : false,
+    ssl: endpoint.ssl ? true : false,
     connectionTimeoutMillis: CONNECTION_TIMEOUT_MS,
   }
 }
@@ -257,6 +302,20 @@ async function closeClient(client: InstanceType<typeof Client>) {
   }
 }
 
+function endpointFromSource(
+  source:
+    | ManualConnectionDraft
+    | StoredManualConnectionSource
+    | StoredInstanceConnectionSource
+): PostgresEndpoint {
+  return {
+    host: source.host,
+    port: source.port,
+    user: source.user,
+    ssl: source.ssl,
+  }
+}
+
 export function createPostgresDriver(): PostgresDriver {
   const activeClients = new Map<string, InstanceType<typeof Client>>()
 
@@ -286,7 +345,13 @@ export function createPostgresDriver(): PostgresDriver {
 
   return {
     async testConnection(request) {
-      const client = new Client(buildClientConfig(request.profile, request.password))
+      const client = new Client(
+        buildClientConfig(
+          endpointFromSource(request.profile),
+          request.password,
+          request.profile.database
+        )
+      )
 
       try {
         await client.connect()
@@ -297,17 +362,55 @@ export function createPostgresDriver(): PostgresDriver {
         await closeClient(client)
       }
     },
+    async listDatabases(request) {
+      const client = new Client(
+        buildClientConfig(
+          endpointFromSource(request.source),
+          request.password,
+          DISCOVERY_CATALOG_DATABASE
+        )
+      )
+
+      try {
+        await client.connect()
+        const result = await client.query<DatabaseRow>(
+          LIST_DISCOVERABLE_DATABASES_SQL
+        )
+
+        return result.rows.map((row) => ({
+          name: row.name,
+        }))
+      } catch (error) {
+        throw toConnectionError(error)
+      } finally {
+        await closeClient(client)
+      }
+    },
     async connect(request) {
-      const client = new Client(buildClientConfig(request.profile, request.password))
+      let database: string
+
+      if (!('database' in request)) {
+        database = request.source.database
+      } else {
+        database = request.database
+      }
+      const client = new Client(
+        buildClientConfig(
+          endpointFromSource(request.source),
+          request.password,
+          database
+        )
+      )
 
       try {
         await client.connect()
 
         const session: ConnectionSession = {
-          profileId: request.profile.id,
-          database: request.profile.database,
-          user: request.profile.user,
-          host: request.profile.host,
+          sourceId: request.source.id,
+          sourceKind: request.source.kind,
+          database,
+          user: request.source.user,
+          host: request.source.host,
           connectedAt: new Date().toISOString(),
           status: 'connected',
         }
@@ -412,12 +515,32 @@ export function createPostgresDriver(): PostgresDriver {
         })),
       }
     },
-    previewTable() {
-      return Promise.reject(
-        notImplementedError(
-          'Table previews are not implemented in this stage.'
-        )
-      )
+    async previewTable(session, request) {
+      const client = getClient(session)
+      const previewSql = `SELECT * FROM ${quoteIdentifier(request.schema)}.${quoteIdentifier(request.table)} LIMIT $1 OFFSET $2`
+
+      try {
+        const result = await client.query<Record<string, unknown>>(previewSql, [
+          request.limit,
+          request.offset,
+        ])
+
+        return {
+          columns: result.fields.map((field) => field.name),
+          rows: result.rows,
+          limit: request.limit,
+          offset: request.offset,
+        }
+      } catch (error) {
+        if (getErrorCode(error) === '42P01') {
+          throw notFoundError('The requested table was not found.', {
+            schema: request.schema,
+            table: request.table,
+          })
+        }
+
+        throw error
+      }
     },
     executeQuery() {
       return Promise.reject(

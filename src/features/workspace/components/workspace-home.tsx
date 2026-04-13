@@ -1,63 +1,106 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronsUpDown,
   Database,
   Monitor,
   Moon,
-  Play,
-  PlugZap,
+  Pencil,
   Plus,
-  RefreshCcw,
-  Save,
+  Server,
   Sun,
-  Trash2,
   Unplug,
 } from 'lucide-react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
+import { Separator } from '@/components/ui/separator'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarHeader,
+  SidebarInset,
+  SidebarProvider,
+  SidebarSeparator,
+  SidebarTrigger,
+} from '@/components/ui/sidebar'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { useTheme } from '@hooks/use-theme'
+import { rendererLogger } from '@lib/logger'
+import { getRowlyBridge } from '@lib/rowly'
 import type {
-  ConnectionProfileDraft,
-  StoredConnectionProfile,
+  DiscoveredDatabase,
+  InstanceConnectionDraft,
+  ManualConnectionDraft,
+  SavedConnectionSource,
+  StoredInstanceConnectionSource,
+  StoredManualConnectionSource,
 } from '@shared/contracts/connections'
 import {
   defaultPanelWidths,
   type AppPreferences,
-  type ThemePreference,
 } from '@shared/contracts/preferences'
-import type {
-  SessionSnapshot,
-  SessionStatus,
-} from '@shared/contracts/session'
-import type { AppInfo } from '@shared/contracts/system'
-import type { AppError } from '@shared/lib/errors'
-import { Button } from '@components/ui/button'
-import { SchemaExplorerPanel } from '@features/workspace/components/schema-explorer-panel'
-import { useTheme } from '@hooks/use-theme'
-import { rendererLogger } from '@lib/logger'
-import { getRowlyBridge } from '@lib/rowly'
+import type { TableDetails } from '@shared/contracts/schema'
+import type { SessionSnapshot } from '@shared/contracts/session'
+import type { TablePreviewResponse } from '@shared/contracts/tables'
 
-type NoticeTone = 'neutral' | 'success' | 'danger'
-
-type Notice = {
-  tone: NoticeTone
-  text: string
-}
-
-type ConnectionCheckState = {
-  tone: NoticeTone
-  text: string
-}
-
-const emptyDraft: ConnectionProfileDraft = {
-  name: '',
-  host: 'localhost',
-  port: 5432,
-  database: '',
-  user: 'postgres',
-  ssl: false,
-}
+import {
+  areInstanceDraftsEqual,
+  areManualDraftsEqual,
+  cloneInstanceDraft,
+  cloneManualDraft,
+  emptyInstanceDraft,
+  emptyManualDraft,
+  instanceDraftFromSource,
+  isBlankInstanceDraft,
+  isBlankManualDraft,
+  manualDraftFromSource,
+  validateInstanceDraft,
+  validateManualDraft,
+} from '../lib/connection-draft'
+import {
+  formatSessionError,
+  formatTableReference,
+} from '../lib/workspace-format'
+import {
+  createAsyncState,
+  type InspectorTab,
+  type Notice,
+  type SelectedSourceTarget,
+  type SelectedTable,
+} from '../lib/workspace-types'
+import { ConnectionModal } from './connection-modal'
+import { InstancePasswordDialog } from './instance-password-dialog'
+import { SchemaExplorerPanel } from './schema-explorer-panel'
+import { SqlEditorPanel } from './sql-editor-panel'
+import { TableInspectorPanel } from './table-inspector-panel'
+import { WorkspaceState } from './workspace-state'
 
 const defaultPreferencesState: AppPreferences = {
   theme: null,
   lastSelectedProfileId: null,
+  lastSelectedTarget: null,
   panelWidths: { ...defaultPanelWidths },
 }
 
@@ -67,233 +110,309 @@ const defaultSessionSnapshot: SessionSnapshot = {
   error: null,
 }
 
-const timestampFormatter = new Intl.DateTimeFormat(undefined, {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-})
-
-function cloneDraft(draft: ConnectionProfileDraft): ConnectionProfileDraft {
-  return {
-    ...draft,
-  }
+type CachedInstanceDiscovery = {
+  databases: DiscoveredDatabase[]
+  discoveredAt: string
 }
 
-function draftFromProfile(profile: StoredConnectionProfile): ConnectionProfileDraft {
-  return {
-    name: profile.name,
-    host: profile.host,
-    port: profile.port,
-    database: profile.database,
-    user: profile.user,
-    ssl: profile.ssl,
-  }
-}
+type PasswordDialogIntent =
+  | {
+      instanceId: string
+      nextAction: 'discover'
+      database: null
+    }
+  | {
+      instanceId: string
+      nextAction: 'connect'
+      database: string
+    }
 
-function areDraftsEqual(
-  left: ConnectionProfileDraft,
-  right: ConnectionProfileDraft
-) {
-  return (
-    left.name === right.name &&
-    left.host === right.host &&
-    left.port === right.port &&
-    left.database === right.database &&
-    left.user === right.user &&
-    left.ssl === right.ssl
-  )
-}
-
-function validateDraft(draft: ConnectionProfileDraft) {
-  if (!draft.name.trim()) {
-    return 'Profile name is required.'
-  }
-
-  if (!draft.host.trim()) {
-    return 'Host is required.'
-  }
-
-  if (!Number.isInteger(draft.port) || draft.port < 1 || draft.port > 65535) {
-    return 'Port must be between 1 and 65535.'
-  }
-
-  if (!draft.database.trim()) {
-    return 'Database name is required.'
-  }
-
-  if (!draft.user.trim()) {
-    return 'User is required.'
-  }
-
-  return null
-}
-
-function isBlankDraft(draft: ConnectionProfileDraft) {
-  return areDraftsEqual(draft, emptyDraft)
-}
-
-function formatTimestamp(value: string | null) {
-  if (!value) {
-    return 'Not available'
-  }
-
-  return timestampFormatter.format(new Date(value))
-}
-
-function noticeClassName(tone: NoticeTone) {
-  if (tone === 'success') {
-    return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-  }
-
-  if (tone === 'danger') {
-    return 'border-destructive/40 bg-destructive/10 text-destructive'
-  }
-
-  return 'border-border bg-muted/60 text-foreground'
-}
-
-function themeButtonIcon(theme: ThemePreference) {
+function themeButtonIcon(theme: AppPreferences['theme']) {
   if (theme === 'light') {
-    return <Sun className="size-4" />
+    return <Sun />
   }
 
   if (theme === 'dark') {
-    return <Moon className="size-4" />
+    return <Moon />
   }
 
-  return <Monitor className="size-4" />
+  return <Monitor />
 }
 
-function formatSessionStatus(status: SessionStatus) {
-  if (status === 'connecting') {
-    return 'Connecting'
-  }
-
-  if (status === 'connected') {
-    return 'Connected'
-  }
-
-  if (status === 'error') {
-    return 'Error'
-  }
-
-  return 'Disconnected'
+function noticeAlertVariant(tone: Notice['tone']) {
+  return tone === 'danger' ? 'destructive' : 'default'
 }
 
-function sessionStatusTone(status: SessionStatus): NoticeTone {
-  if (status === 'connected') {
-    return 'success'
+function noticeAlertIcon(tone: Notice['tone']) {
+  if (tone === 'danger') {
+    return <AlertCircle />
   }
 
-  if (status === 'error') {
-    return 'danger'
-  }
-
-  return 'neutral'
+  return <Database />
 }
 
-function formatConnectionCause(cause: string | null | undefined) {
-  if (cause === 'HOST_UNREACHABLE') {
-    return 'Host unreachable'
-  }
-
-  if (cause === 'INVALID_CREDENTIALS') {
-    return 'Invalid credentials'
-  }
-
-  if (cause === 'DATABASE_NOT_FOUND') {
-    return 'Database not found'
-  }
-
-  if (cause === 'TIMEOUT') {
-    return 'Timeout'
-  }
-
-  if (cause === 'SSL_FAILED') {
-    return 'SSL failed'
-  }
-
-  if (cause === 'SESSION_REQUIRED') {
-    return 'Session required'
-  }
-
-  return 'Unknown'
-}
-
-function formatSessionError(error: AppError | null) {
-  if (!error) {
-    return 'None'
-  }
-
-  return `${error.message} (${formatConnectionCause(error.cause)})`
-}
-
-function getProfileSessionLabel(
-  profileId: string,
+function targetMatchesSession(
+  target: SelectedSourceTarget | null,
   sessionState: SessionSnapshot
 ) {
-  if (sessionState.active?.profileId !== profileId) {
-    return 'Stored'
+  if (!target || !sessionState.active) {
+    return false
   }
 
-  if (sessionState.status === 'connecting') {
-    return 'Connecting'
+  if (target.kind === 'manual') {
+    return (
+      sessionState.active.sourceKind === 'manual' &&
+      sessionState.active.sourceId === target.sourceId
+    )
   }
 
-  if (sessionState.status === 'connected') {
-    return 'Connected'
+  return (
+    sessionState.active.sourceKind === 'instance' &&
+    sessionState.active.sourceId === target.sourceId &&
+    sessionState.active.database === target.database
+  )
+}
+
+function sourceLabelForTarget(
+  target: SelectedSourceTarget | null,
+  sources: SavedConnectionSource[]
+) {
+  if (!target) {
+    return 'Select connection'
   }
 
-  if (sessionState.status === 'error') {
-    return 'Error'
+  const source = sources.find((entry) => entry.id === target.sourceId)
+
+  if (!source) {
+    return 'Select connection'
   }
 
-  return 'Stored'
+  if (target.kind === 'manual') {
+    return source.name
+  }
+
+  return `${source.name} / ${target.database}`
 }
 
 export function WorkspaceHome() {
   const bridge = getRowlyBridge()
-  const { theme, resolvedTheme, setTheme } = useTheme()
-  const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
+  const tableLoadIdRef = useRef(0)
+  const { theme, setTheme } = useTheme()
+
   const [preferences, setPreferences] = useState<AppPreferences>(
     defaultPreferencesState
   )
-  const [profiles, setProfiles] = useState<StoredConnectionProfile[]>([])
-  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null)
-  const [draft, setDraft] = useState<ConnectionProfileDraft>(cloneDraft(emptyDraft))
-  const [password, setPassword] = useState('')
-  const [sessionState, setSessionState] =
-    useState<SessionSnapshot>(defaultSessionSnapshot)
-  const [notice, setNotice] = useState<Notice>({
-    tone: 'neutral',
-    text: 'Profiles are stored locally. Passwords stay in memory only for test and connect.',
-  })
-  const [connectionCheck, setConnectionCheck] =
-    useState<ConnectionCheckState | null>(null)
+  const [sources, setSources] = useState<SavedConnectionSource[]>([])
+  const [selectedTarget, setSelectedTarget] = useState<SelectedSourceTarget | null>(
+    null
+  )
+  const [instanceDiscoveries, setInstanceDiscoveries] = useState<
+    Record<string, CachedInstanceDiscovery>
+  >({})
+  const [expandedInstances, setExpandedInstances] = useState<Set<string>>(
+    () => new Set()
+  )
+  const [sessionState, setSessionState] = useState<SessionSnapshot>(
+    defaultSessionSnapshot
+  )
   const [isLoading, setIsLoading] = useState(true)
-  const [pendingAction, setPendingAction] =
-    useState<'save' | 'test' | 'delete' | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(null)
+  const [isConnectionPopoverOpen, setIsConnectionPopoverOpen] = useState(false)
 
-  const selectedProfile = useMemo(
-    () => profiles.find((profile) => profile.id === selectedProfileId) ?? null,
-    [profiles, selectedProfileId]
+  const [sidebarWidth, setSidebarWidth] = useState(
+    preferences.panelWidths.sidebar
+  )
+  const sidebarWidthRef = useRef(sidebarWidth)
+  const preferencesRef = useRef(preferences)
+
+  const [isManualModalOpen, setIsManualModalOpen] = useState(false)
+  const [manualModalSourceId, setManualModalSourceId] = useState<string | null>(null)
+  const [manualDraft, setManualDraft] = useState(cloneManualDraft(emptyManualDraft))
+  const [manualPassword, setManualPassword] = useState('')
+  const [manualModalNotice, setManualModalNotice] = useState<Notice | null>(null)
+  const [manualActionNotice, setManualActionNotice] = useState<Notice | null>(null)
+  const [manualPendingAction, setManualPendingAction] = useState<
+    'save' | 'test' | 'delete' | null
+  >(null)
+
+  const [isInstanceModalOpen, setIsInstanceModalOpen] = useState(false)
+  const [instanceModalSourceId, setInstanceModalSourceId] = useState<
+    string | null
+  >(null)
+  const [instanceDraft, setInstanceDraft] = useState(
+    cloneInstanceDraft(emptyInstanceDraft)
+  )
+  const [instancePassword, setInstancePassword] = useState('')
+  const [instanceModalNotice, setInstanceModalNotice] = useState<Notice | null>(
+    null
+  )
+  const [instanceActionNotice, setInstanceActionNotice] = useState<Notice | null>(
+    null
+  )
+  const [instancePendingAction, setInstancePendingAction] = useState<
+    'save' | 'discover' | 'delete' | null
+  >(null)
+
+  const [passwordDialogIntent, setPasswordDialogIntent] =
+    useState<PasswordDialogIntent | null>(null)
+  const [instancePasswordPrompt, setInstancePasswordPrompt] = useState('')
+  const [instancePasswordPromptNotice, setInstancePasswordPromptNotice] =
+    useState<Notice | null>(null)
+  const [isPasswordPromptBusy, setIsPasswordPromptBusy] = useState(false)
+
+  const [sqlDraft, setSqlDraft] = useState(
+    '-- Stage 6 shell\n-- Query execution will be enabled in the next stage.\n'
+  )
+  const [selectedTable, setSelectedTable] = useState<SelectedTable | null>(null)
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<'sql' | 'table'>(
+    'sql'
+  )
+  const [activeInspectorTab, setActiveInspectorTab] =
+    useState<InspectorTab>('data')
+  const [structureState, setStructureState] =
+    useState(createAsyncState<TableDetails>())
+  const [previewState, setPreviewState] =
+    useState(createAsyncState<TablePreviewResponse>())
+
+  const manualSources = useMemo(
+    () =>
+      sources.filter(
+        (source): source is StoredManualConnectionSource => source.kind === 'manual'
+      ),
+    [sources]
+  )
+  const instanceSources = useMemo(
+    () =>
+      sources.filter(
+        (source): source is StoredInstanceConnectionSource =>
+          source.kind === 'instance'
+      ),
+    [sources]
   )
 
+  const manualModalSource =
+    manualSources.find((source) => source.id === manualModalSourceId) ?? null
+  const instanceModalSource =
+    instanceSources.find((source) => source.id === instanceModalSourceId) ?? null
+  const passwordDialogSource =
+    instanceSources.find((source) => source.id === passwordDialogIntent?.instanceId) ??
+    null
   const session = sessionState.active
-  const validationMessage = validateDraft(draft)
-  const isDirty = selectedProfile
-    ? !areDraftsEqual(draft, draftFromProfile(selectedProfile))
-    : !isBlankDraft(draft)
+  const sessionFingerprint = session
+    ? `${session.sourceId}:${session.connectedAt}`
+    : null
+  const manualValidationMessage = validateManualDraft(manualDraft)
+  const instanceValidationMessage = validateInstanceDraft(instanceDraft)
+  const isManualDirty = manualModalSource
+    ? !areManualDraftsEqual(manualDraft, manualDraftFromSource(manualModalSource))
+    : !isBlankManualDraft(manualDraft)
+  const isInstanceDirty = instanceModalSource
+    ? !areInstanceDraftsEqual(
+        instanceDraft,
+        instanceDraftFromSource(instanceModalSource)
+      )
+    : !isBlankInstanceDraft(instanceDraft)
   const isSessionBusy = sessionState.status === 'connecting'
-  const canSave = validationMessage === null
-  const canTest = validationMessage === null && password.trim().length > 0
-  const canConnect =
-    selectedProfile !== null &&
-    validationMessage === null &&
-    password.trim().length > 0 &&
-    !isDirty &&
+  const canSaveManual = manualValidationMessage === null
+  const canTestManual =
+    manualValidationMessage === null && manualPassword.trim().length > 0
+  const canConnectManual =
+    manualModalSource !== null &&
+    manualValidationMessage === null &&
+    manualPassword.trim().length > 0 &&
+    !isManualDirty &&
     !isSessionBusy
-  const activeProfileName =
-    profiles.find((profile) => profile.id === session?.profileId)?.name ?? null
+  const canSaveInstance = instanceValidationMessage === null
+  const canDiscoverInstance =
+    instanceValidationMessage === null &&
+    instancePassword.trim().length > 0 &&
+    !isInstanceDirty
+  const activeSourceName =
+    sources.find((source) => source.id === session?.sourceId)?.name ?? null
+  const selectorLabel = sourceLabelForTarget(selectedTarget, sources)
+
+  useEffect(() => {
+    sidebarWidthRef.current = sidebarWidth
+  }, [sidebarWidth])
+
+  useEffect(() => {
+    preferencesRef.current = preferences
+  }, [preferences])
+
+  const handleSidebarResizeStart = useCallback(
+    (e: ReactMouseEvent) => {
+      e.preventDefault()
+      const startX = e.clientX
+      const startWidth = sidebarWidthRef.current
+
+      const onMouseMove = (moveEvent: MouseEvent) => {
+        const delta = moveEvent.clientX - startX
+        const next = Math.max(220, Math.min(560, startWidth + delta))
+        setSidebarWidth(next)
+      }
+
+      const onMouseUp = () => {
+        document.removeEventListener('mousemove', onMouseMove)
+        document.removeEventListener('mouseup', onMouseUp)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+
+        void bridge.preferences.set({
+          panelWidths: {
+            ...preferencesRef.current.panelWidths,
+            sidebar: sidebarWidthRef.current,
+          },
+        })
+      }
+
+      document.body.style.cursor = 'col-resize'
+      document.body.style.userSelect = 'none'
+      document.addEventListener('mousemove', onMouseMove)
+      document.addEventListener('mouseup', onMouseUp)
+    },
+    [bridge]
+  )
+
+  const persistSelection = useCallback(
+    async (target: SelectedSourceTarget | null) => {
+      setSelectedTarget(target)
+
+      const result = await bridge.preferences.set(
+        target?.kind === 'manual'
+          ? {
+              lastSelectedProfileId: target.sourceId,
+              lastSelectedTarget: null,
+            }
+          : target
+            ? {
+                lastSelectedProfileId: null,
+                lastSelectedTarget: {
+                  sourceId: target.sourceId,
+                  database: target.database,
+                },
+              }
+            : {
+                lastSelectedProfileId: null,
+                lastSelectedTarget: null,
+              }
+      )
+
+      if (!result.ok) {
+        rendererLogger.warn('Unable to persist selected target.', {
+          error: result.error,
+          target,
+        })
+        setNotice({
+          tone: 'danger',
+          text: result.error.message,
+        })
+        return
+      }
+
+      setPreferences(result.data)
+    },
+    [bridge]
+  )
 
   useEffect(() => {
     const unsubscribe = bridge.session.onStateChanged((nextState) => {
@@ -303,39 +422,31 @@ export function WorkspaceHome() {
     const loadWorkspace = async () => {
       setIsLoading(true)
 
-      const [appInfoResult, profilesResult, preferencesResult, sessionStateResult] =
+      const [sourcesResult, preferencesResult, sessionStateResult] =
         await Promise.all([
-          bridge.system.getAppInfo(),
           bridge.connections.list(),
           bridge.preferences.get(),
           bridge.session.getState(),
         ])
 
-      if (appInfoResult.ok) {
-        setAppInfo(appInfoResult.data)
-      } else {
-        rendererLogger.warn('Unable to read app metadata.', {
-          error: appInfoResult.error,
-        })
-      }
-
-      if (!profilesResult.ok) {
-        rendererLogger.warn('Unable to load profiles.', {
-          error: profilesResult.error,
+      if (!sourcesResult.ok) {
+        rendererLogger.warn('Unable to load connection sources.', {
+          error: sourcesResult.error,
         })
         setNotice({
           tone: 'danger',
-          text: profilesResult.error.message,
+          text: sourcesResult.error.message,
         })
         setIsLoading(false)
         return
       }
 
-      const nextProfiles = profilesResult.data
-      setProfiles(nextProfiles)
+      const nextSources = sourcesResult.data
+      setSources(nextSources)
 
       if (preferencesResult.ok) {
         setPreferences(preferencesResult.data)
+        setSidebarWidth(preferencesResult.data.panelWidths.sidebar)
       } else {
         rendererLogger.warn('Unable to load preferences.', {
           error: preferencesResult.error,
@@ -351,30 +462,44 @@ export function WorkspaceHome() {
         setSessionState(defaultSessionSnapshot)
       }
 
-      const preferredProfileId = preferencesResult.ok
-        ? preferencesResult.data.lastSelectedProfileId
-        : null
-      const preferredProfile =
-        nextProfiles.find((profile) => profile.id === preferredProfileId) ?? null
+      const nextSelectedTarget =
+        sessionStateResult.ok && sessionStateResult.data.active
+          ? sessionStateResult.data.active.sourceKind === 'manual'
+            ? ({
+                kind: 'manual',
+                sourceId: sessionStateResult.data.active.sourceId,
+              } satisfies SelectedSourceTarget)
+            : ({
+                kind: 'instanceDatabase',
+                sourceId: sessionStateResult.data.active.sourceId,
+                database: sessionStateResult.data.active.database,
+              } satisfies SelectedSourceTarget)
+          : preferencesResult.ok &&
+              preferencesResult.data.lastSelectedTarget &&
+              nextSources.some(
+                (source) =>
+                  source.kind === 'instance' &&
+                  source.id === preferencesResult.data.lastSelectedTarget?.sourceId
+              )
+            ? ({
+                kind: 'instanceDatabase',
+                sourceId: preferencesResult.data.lastSelectedTarget.sourceId,
+                database: preferencesResult.data.lastSelectedTarget.database,
+              } satisfies SelectedSourceTarget)
+            : preferencesResult.ok &&
+                preferencesResult.data.lastSelectedProfileId &&
+                nextSources.some(
+                  (source) =>
+                    source.kind === 'manual' &&
+                    source.id === preferencesResult.data.lastSelectedProfileId
+                )
+              ? ({
+                  kind: 'manual',
+                  sourceId: preferencesResult.data.lastSelectedProfileId,
+                } satisfies SelectedSourceTarget)
+              : null
 
-      if (preferredProfile) {
-        setSelectedProfileId(preferredProfile.id)
-        setDraft(draftFromProfile(preferredProfile))
-      } else {
-        setSelectedProfileId(null)
-        setDraft(cloneDraft(emptyDraft))
-
-        if (preferredProfileId) {
-          const clearSelectionResult = await bridge.preferences.set({
-            lastSelectedProfileId: null,
-          })
-
-          if (clearSelectionResult.ok) {
-            setPreferences(clearSelectionResult.data)
-          }
-        }
-      }
-
+      setSelectedTarget(nextSelectedTarget)
       setIsLoading(false)
     }
 
@@ -385,119 +510,258 @@ export function WorkspaceHome() {
     }
   }, [bridge])
 
-  const persistSelection = async (profileId: string | null) => {
-    setSelectedProfileId(profileId)
+  useEffect(() => {
+    if (sessionState.active) {
+      setSelectedTarget(
+        sessionState.active.sourceKind === 'manual'
+          ? {
+              kind: 'manual',
+              sourceId: sessionState.active.sourceId,
+            }
+          : {
+              kind: 'instanceDatabase',
+              sourceId: sessionState.active.sourceId,
+              database: sessionState.active.database,
+            }
+      )
+    }
+  }, [sessionState.active])
 
-    const result = await bridge.preferences.set({
-      lastSelectedProfileId: profileId,
-    })
+  useEffect(() => {
+    tableLoadIdRef.current += 1
 
-    if (!result.ok) {
-      rendererLogger.warn('Unable to persist selected profile.', {
-        error: result.error,
-        profileId,
-      })
-      setNotice({
-        tone: 'danger',
-        text: result.error.message,
-      })
+    setActiveWorkspaceTab('sql')
+    setSelectedTable(null)
+    setActiveInspectorTab('data')
+    setStructureState(createAsyncState<TableDetails>())
+    setPreviewState(createAsyncState<TablePreviewResponse>())
+  }, [sessionFingerprint])
+
+  useEffect(() => {
+    if (!selectedTable && activeWorkspaceTab === 'table') {
+      setActiveWorkspaceTab('sql')
+    }
+  }, [activeWorkspaceTab, selectedTable])
+
+  useEffect(() => {
+    if (
+      selectedTarget &&
+      !sources.some((source) => source.id === selectedTarget.sourceId)
+    ) {
+      setSelectedTarget(null)
+    }
+  }, [selectedTarget, sources])
+
+  const closeManualModal = () => {
+    setIsManualModalOpen(false)
+    setManualModalSourceId(null)
+    setManualDraft(cloneManualDraft(emptyManualDraft))
+    setManualPassword('')
+    setManualActionNotice(null)
+    setManualModalNotice(null)
+    setManualPendingAction(null)
+  }
+
+  const closeInstanceModal = () => {
+    setIsInstanceModalOpen(false)
+    setInstanceModalSourceId(null)
+    setInstanceDraft(cloneInstanceDraft(emptyInstanceDraft))
+    setInstancePassword('')
+    setInstanceActionNotice(null)
+    setInstanceModalNotice(null)
+    setInstancePendingAction(null)
+  }
+
+  const closePasswordDialog = () => {
+    if (isPasswordPromptBusy) {
       return
     }
 
-    setPreferences(result.data)
+    setPasswordDialogIntent(null)
+    setInstancePasswordPrompt('')
+    setInstancePasswordPromptNotice(null)
+    setIsPasswordPromptBusy(false)
   }
 
-  const applyProfileSelection = async (profile: StoredConnectionProfile | null) => {
-    setConnectionCheck(null)
-    setPassword('')
-
-    if (!profile) {
-      setDraft(cloneDraft(emptyDraft))
-      await persistSelection(null)
-      return
-    }
-
-    setDraft(draftFromProfile(profile))
-    await persistSelection(profile.id)
+  const openManualModal = (source: StoredManualConnectionSource | null) => {
+    setIsManualModalOpen(true)
+    setManualModalSourceId(source?.id ?? null)
+    setManualDraft(
+      source ? manualDraftFromSource(source) : cloneManualDraft(emptyManualDraft)
+    )
+    setManualPassword('')
+    setManualActionNotice(null)
+    setManualModalNotice(null)
+    setManualPendingAction(null)
   }
 
-  const handleDraftChange = <K extends keyof ConnectionProfileDraft>(
-    key: K,
-    value: ConnectionProfileDraft[K]
+  const openInstanceModal = (source: StoredInstanceConnectionSource | null) => {
+    setIsInstanceModalOpen(true)
+    setInstanceModalSourceId(source?.id ?? null)
+    setInstanceDraft(
+      source
+        ? instanceDraftFromSource(source)
+        : cloneInstanceDraft(emptyInstanceDraft)
+    )
+    setInstancePassword('')
+    setInstanceActionNotice(null)
+    setInstanceModalNotice(null)
+    setInstancePendingAction(null)
+  }
+
+  const promptInstancePassword = (
+    instanceId: string,
+    nextAction: 'discover' | 'connect',
+    database: string | null = null
   ) => {
-    setDraft((currentDraft) => ({
+    setPasswordDialogIntent({
+      instanceId,
+      nextAction,
+      database,
+    } as PasswordDialogIntent)
+    setInstancePasswordPrompt('')
+    setInstancePasswordPromptNotice(null)
+  }
+
+  const handleManualDraftChange = <K extends keyof ManualConnectionDraft>(
+    key: K,
+    value: ManualConnectionDraft[K]
+  ) => {
+    setManualDraft((currentDraft) => ({
       ...currentDraft,
       [key]: value,
     }))
   }
 
-  const handleSave = async () => {
-    if (validationMessage) {
-      setNotice({
-        tone: 'danger',
-        text: validationMessage,
-      })
-      return
-    }
+  const handleInstanceDraftChange = <K extends keyof InstanceConnectionDraft>(
+    key: K,
+    value: InstanceConnectionDraft[K]
+  ) => {
+    setInstanceDraft((currentDraft) => ({
+      ...currentDraft,
+      [key]: value,
+    }))
+  }
 
-    setPendingAction('save')
-    setConnectionCheck(null)
-
-    const result = selectedProfile
-      ? await bridge.connections.update({
-          id: selectedProfile.id,
-          draft,
-        })
-      : await bridge.connections.save(draft)
-
-    setPendingAction(null)
-
-    if (!result.ok) {
-      setNotice({
-        tone: 'danger',
-        text: result.error.message,
-      })
-      return
-    }
-
-    const nextProfile = result.data
-
-    setProfiles((currentProfiles) => {
-      const alreadyExists = currentProfiles.some(
-        (profile) => profile.id === nextProfile.id
+  const mergeSource = useCallback((nextSource: SavedConnectionSource) => {
+    setSources((currentSources) => {
+      const alreadyExists = currentSources.some(
+        (source) => source.id === nextSource.id
       )
 
       if (!alreadyExists) {
-        return [...currentProfiles, nextProfile]
+        return [...currentSources, nextSource]
       }
 
-      return currentProfiles.map((profile) =>
-        profile.id === nextProfile.id ? nextProfile : profile
+      return currentSources.map((source) =>
+        source.id === nextSource.id ? nextSource : source
       )
     })
+  }, [])
 
-    setDraft(draftFromProfile(nextProfile))
-    await persistSelection(nextProfile.id)
-    setNotice({
-      tone: 'success',
-      text: selectedProfile
-        ? 'Profile updated and stored locally.'
-        : 'Profile created and stored locally.',
-    })
-  }
+  const connectToInstanceDatabase = useCallback(
+    async (source: StoredInstanceConnectionSource, database: string) => {
+      const result = await bridge.session.connect({
+        targetKind: 'instanceDatabase',
+        sourceId: source.id,
+        database,
+      })
 
-  const handleDelete = async () => {
-    if (!selectedProfile) {
+      if (!result.ok) {
+        if (result.error.cause === 'PASSWORD_REQUIRED') {
+          promptInstancePassword(source.id, 'connect', database)
+          return
+        }
+
+        setNotice({
+          tone: 'danger',
+          text: result.error.message,
+        })
+        return
+      }
+
+      await persistSelection({
+        kind: 'instanceDatabase',
+        sourceId: source.id,
+        database,
+      })
+      setNotice({
+        tone: 'success',
+        text: `Connected to ${database} on ${source.host}.`,
+      })
+      setIsConnectionPopoverOpen(false)
+    },
+    [bridge, persistSelection]
+  )
+
+  const discoverInstance = useCallback(
+    async (
+      source: StoredInstanceConnectionSource,
+      password?: string
+    ): Promise<CachedInstanceDiscovery | null> => {
+      const result = await bridge.connections.discoverInstance({
+        sourceId: source.id,
+        ...(password ? { password } : {}),
+      })
+
+      if (!result.ok) {
+        if (result.error.cause === 'PASSWORD_REQUIRED') {
+          promptInstancePassword(source.id, 'discover')
+          return null
+        }
+
+        setInstanceActionNotice({
+          tone: 'danger',
+          text: result.error.message,
+        })
+        setNotice({
+          tone: 'danger',
+          text: result.error.message,
+        })
+        return null
+      }
+
+      const nextDiscovery = {
+        databases: result.data.databases,
+        discoveredAt: result.data.discoveredAt,
+      }
+
+      setInstanceDiscoveries((current) => ({
+        ...current,
+        [source.id]: nextDiscovery,
+      }))
+
+      return nextDiscovery
+    },
+    [bridge]
+  )
+
+  const handleManualSave = async () => {
+    if (manualValidationMessage) {
+      setManualModalNotice({
+        tone: 'danger',
+        text: manualValidationMessage,
+      })
       return
     }
 
-    setPendingAction('delete')
+    setManualPendingAction('save')
+    setManualActionNotice(null)
 
-    const result = await bridge.connections.remove(selectedProfile.id)
+    const result = manualModalSource
+      ? await bridge.connections.updateManual({
+          id: manualModalSource.id,
+          draft: manualDraft,
+        })
+      : await bridge.connections.saveManual(manualDraft)
 
-    setPendingAction(null)
+    setManualPendingAction(null)
 
     if (!result.ok) {
+      setManualModalNotice({
+        tone: 'danger',
+        text: result.error.message,
+      })
       setNotice({
         tone: 'danger',
         text: result.error.message,
@@ -505,89 +769,121 @@ export function WorkspaceHome() {
       return
     }
 
-    setProfiles((currentProfiles) =>
-      currentProfiles.filter((profile) => profile.id !== selectedProfile.id)
-    )
-    setConnectionCheck(null)
-    setPassword('')
-    setDraft(cloneDraft(emptyDraft))
-    setSelectedProfileId(null)
-
-    const nextPreferences = {
-      ...preferences,
-      lastSelectedProfileId: null,
-    }
-
-    setPreferences(nextPreferences)
+    mergeSource(result.data)
+    await persistSelection({
+      kind: 'manual',
+      sourceId: result.data.id,
+    })
+    setManualModalSourceId(result.data.id)
+    setManualDraft(manualDraftFromSource(result.data))
+    setManualModalNotice({
+      tone: 'success',
+      text: manualModalSource
+        ? 'Manual connection updated.'
+        : 'Manual connection created.',
+    })
     setNotice({
       tone: 'success',
-      text: 'Profile removed from local storage.',
+      text: manualModalSource
+        ? 'Manual connection updated and ready to reconnect.'
+        : 'Manual connection stored locally.',
     })
   }
 
-  const handleTestConnection = async () => {
-    if (validationMessage) {
-      setConnectionCheck({
+  const handleManualDelete = async () => {
+    if (!manualModalSource) {
+      return
+    }
+
+    setManualPendingAction('delete')
+    const result = await bridge.connections.remove(manualModalSource.id)
+    setManualPendingAction(null)
+
+    if (!result.ok) {
+      setManualModalNotice({
         tone: 'danger',
-        text: validationMessage,
+        text: result.error.message,
+      })
+      setNotice({
+        tone: 'danger',
+        text: result.error.message,
       })
       return
     }
 
-    if (!password.trim()) {
-      setConnectionCheck({
+    setSources((currentSources) =>
+      currentSources.filter((source) => source.id !== manualModalSource.id)
+    )
+    if (
+      selectedTarget?.kind === 'manual' &&
+      selectedTarget.sourceId === manualModalSource.id
+    ) {
+      await persistSelection(null)
+    }
+    closeManualModal()
+    setNotice({
+      tone: 'success',
+      text: 'Manual connection removed from local storage.',
+    })
+  }
+
+  const handleManualTest = async () => {
+    if (manualValidationMessage) {
+      setManualActionNotice({
+        tone: 'danger',
+        text: manualValidationMessage,
+      })
+      return
+    }
+
+    if (!manualPassword.trim()) {
+      setManualActionNotice({
         tone: 'danger',
         text: 'Password is required for connection tests.',
       })
       return
     }
 
-    setPendingAction('test')
-
-    const result = await bridge.connections.test({
-      profile: draft,
-      password,
+    setManualPendingAction('test')
+    const result = await bridge.connections.testManual({
+      profile: manualDraft,
+      password: manualPassword,
     })
-
-    setPendingAction(null)
+    setManualPendingAction(null)
 
     if (!result.ok) {
-      setConnectionCheck({
+      setManualActionNotice({
         tone: 'danger',
         text: result.error.message,
       })
       return
     }
 
-    setConnectionCheck({
+    setManualActionNotice({
       tone: 'success',
       text: 'Connection test succeeded with the current draft values.',
     })
-    setNotice({
-      tone: 'success',
-      text: 'The connection test passed. You can connect when the profile is saved.',
-    })
   }
 
-  const handleConnect = async () => {
-    if (!selectedProfile) {
-      setNotice({
+  const handleManualConnect = async () => {
+    if (!manualModalSource) {
+      setManualModalNotice({
         tone: 'danger',
-        text: 'Save the profile before opening a database session.',
+        text: 'Save the manual connection before connecting.',
       })
       return
     }
 
-    if (isDirty) {
-      setNotice({
+    if (isManualDirty) {
+      setManualModalNotice({
         tone: 'danger',
         text: 'Save the current edits before connecting.',
       })
       return
     }
 
-    if (!password.trim()) {
-      setNotice({
+    if (!manualPassword.trim()) {
+      setManualModalNotice({
         tone: 'danger',
         text: 'Password is required to connect.',
       })
@@ -595,11 +891,16 @@ export function WorkspaceHome() {
     }
 
     const result = await bridge.session.connect({
-      profileId: selectedProfile.id,
-      password,
+      targetKind: 'manual',
+      sourceId: manualModalSource.id,
+      password: manualPassword,
     })
 
     if (!result.ok) {
+      setManualModalNotice({
+        tone: 'danger',
+        text: result.error.message,
+      })
       setNotice({
         tone: 'danger',
         text: result.error.message,
@@ -607,9 +908,171 @@ export function WorkspaceHome() {
       return
     }
 
+    await persistSelection({
+      kind: 'manual',
+      sourceId: manualModalSource.id,
+    })
     setNotice({
       tone: 'success',
-      text: `Connected to ${selectedProfile.database} on ${selectedProfile.host}.`,
+      text: `Connected to ${manualModalSource.database} on ${manualModalSource.host}.`,
+    })
+    closeManualModal()
+  }
+
+  const handleInstanceSave = async () => {
+    if (instanceValidationMessage) {
+      setInstanceModalNotice({
+        tone: 'danger',
+        text: instanceValidationMessage,
+      })
+      return
+    }
+
+    setInstancePendingAction('save')
+    setInstanceActionNotice(null)
+
+    const result = instanceModalSource
+      ? await bridge.connections.updateInstance({
+          id: instanceModalSource.id,
+          draft: instanceDraft,
+        })
+      : await bridge.connections.saveInstance(instanceDraft)
+
+    setInstancePendingAction(null)
+
+    if (!result.ok) {
+      setInstanceModalNotice({
+        tone: 'danger',
+        text: result.error.message,
+      })
+      setNotice({
+        tone: 'danger',
+        text: result.error.message,
+      })
+      return
+    }
+
+    mergeSource(result.data)
+    setInstanceModalSourceId(result.data.id)
+    setInstanceDraft(instanceDraftFromSource(result.data))
+    setInstanceModalNotice({
+      tone: 'success',
+      text: instanceModalSource
+        ? 'PostgreSQL instance updated.'
+        : 'PostgreSQL instance saved.',
+    })
+    setNotice({
+      tone: 'success',
+      text: instanceModalSource
+        ? 'Instance updated. Rediscover databases with a password.'
+        : 'Instance saved. Discover databases to connect.',
+    })
+
+    if (instancePassword.trim()) {
+      setInstancePendingAction('discover')
+      const discovery = await discoverInstance(result.data, instancePassword)
+      setInstancePendingAction(null)
+
+      if (discovery) {
+        setExpandedInstances((current) => new Set(current).add(result.data.id))
+        setInstanceActionNotice({
+          tone: 'success',
+          text:
+            discovery.databases.length > 0
+              ? `Found ${discovery.databases.length} databases for this instance.`
+              : 'No connectable user databases were found for this instance.',
+        })
+      }
+    }
+  }
+
+  const handleInstanceDelete = async () => {
+    if (!instanceModalSource) {
+      return
+    }
+
+    setInstancePendingAction('delete')
+    const result = await bridge.connections.remove(instanceModalSource.id)
+    setInstancePendingAction(null)
+
+    if (!result.ok) {
+      setInstanceModalNotice({
+        tone: 'danger',
+        text: result.error.message,
+      })
+      setNotice({
+        tone: 'danger',
+        text: result.error.message,
+      })
+      return
+    }
+
+    setSources((currentSources) =>
+      currentSources.filter((source) => source.id !== instanceModalSource.id)
+    )
+    setInstanceDiscoveries((current) => {
+      const next = { ...current }
+      delete next[instanceModalSource.id]
+      return next
+    })
+    setExpandedInstances((current) => {
+      const next = new Set(current)
+      next.delete(instanceModalSource.id)
+      return next
+    })
+    if (
+      selectedTarget?.kind === 'instanceDatabase' &&
+      selectedTarget.sourceId === instanceModalSource.id
+    ) {
+      await persistSelection(null)
+    }
+    closeInstanceModal()
+    setNotice({
+      tone: 'success',
+      text: 'PostgreSQL instance removed from local storage.',
+    })
+  }
+
+  const handleInstanceDiscoverFromModal = async () => {
+    if (!instanceModalSource) {
+      setInstanceModalNotice({
+        tone: 'danger',
+        text: 'Save the instance before discovering databases.',
+      })
+      return
+    }
+
+    if (isInstanceDirty) {
+      setInstanceModalNotice({
+        tone: 'danger',
+        text: 'Save the current edits before discovering databases.',
+      })
+      return
+    }
+
+    if (!instancePassword.trim()) {
+      setInstanceActionNotice({
+        tone: 'danger',
+        text: 'Password is required for database discovery.',
+      })
+      return
+    }
+
+    setInstancePendingAction('discover')
+    const discovery = await discoverInstance(instanceModalSource, instancePassword)
+    setInstancePendingAction(null)
+
+    if (!discovery) {
+      return
+    }
+
+    setExpandedInstances((current) => new Set(current).add(instanceModalSource.id))
+    setInstanceActionNotice({
+      tone: 'success',
+      text:
+        discovery.databases.length > 0
+          ? `Found ${discovery.databases.length} databases for this instance.`
+          : 'No connectable user databases were found for this instance.',
     })
   }
 
@@ -621,463 +1084,703 @@ export function WorkspaceHome() {
         tone: 'danger',
         text: result.error.message,
       })
+      setManualModalNotice({
+        tone: 'danger',
+        text: result.error.message,
+      })
+      setInstanceModalNotice({
+        tone: 'danger',
+        text: result.error.message,
+      })
       return
     }
 
     setNotice({
       tone: 'neutral',
-      text: 'Database session closed. Stored profiles remain available.',
+      text: 'Database session closed. Saved instances and manual connections remain available.',
     })
+  }
+
+  const toggleInstanceExpansion = async (source: StoredInstanceConnectionSource) => {
+    const isExpanded = expandedInstances.has(source.id)
+
+    setExpandedInstances((current) => {
+      const next = new Set(current)
+      if (isExpanded) {
+        next.delete(source.id)
+      } else {
+        next.add(source.id)
+      }
+      return next
+    })
+
+    if (!isExpanded && !instanceDiscoveries[source.id]) {
+      const discovery = await discoverInstance(source)
+
+      if (discovery) {
+        setNotice({
+          tone: 'success',
+          text:
+            discovery.databases.length > 0
+              ? `Loaded ${discovery.databases.length} databases for ${source.name}.`
+              : `No connectable user databases were found for ${source.name}.`,
+        })
+      }
+    }
+  }
+
+  const handleManualSelect = (source: StoredManualConnectionSource) => {
+    setIsConnectionPopoverOpen(false)
+    void persistSelection({
+      kind: 'manual',
+      sourceId: source.id,
+    })
+
+    if (sessionState.active?.sourceId !== source.id) {
+      openManualModal(source)
+    }
+  }
+
+  const handlePasswordDialogSubmit = async () => {
+    if (!passwordDialogIntent || !passwordDialogSource) {
+      return
+    }
+
+    if (!instancePasswordPrompt.trim()) {
+      setInstancePasswordPromptNotice({
+        tone: 'danger',
+        text: 'Password is required.',
+      })
+      return
+    }
+
+    setIsPasswordPromptBusy(true)
+    const discovery = await discoverInstance(passwordDialogSource, instancePasswordPrompt)
+
+    if (!discovery) {
+      setIsPasswordPromptBusy(false)
+      setInstancePasswordPromptNotice({
+        tone: 'danger',
+        text: 'Unable to unlock this instance with the provided password.',
+      })
+      return
+    }
+
+    setExpandedInstances((current) => new Set(current).add(passwordDialogSource.id))
+
+    if (passwordDialogIntent.nextAction === 'connect') {
+      await connectToInstanceDatabase(
+        passwordDialogSource,
+        passwordDialogIntent.database
+      )
+    } else {
+      setNotice({
+        tone: 'success',
+        text:
+          discovery.databases.length > 0
+            ? `Loaded ${discovery.databases.length} databases for ${passwordDialogSource.name}.`
+            : `No connectable user databases were found for ${passwordDialogSource.name}.`,
+      })
+    }
+
+    setIsPasswordPromptBusy(false)
+    closePasswordDialog()
+  }
+
+  const loadTableData = async (table: SelectedTable) => {
+    const loadId = tableLoadIdRef.current + 1
+    tableLoadIdRef.current = loadId
+
+    setSelectedTable(table)
+    setStructureState({
+      status: 'loading',
+      data: null,
+      error: null,
+    })
+    setPreviewState({
+      status: 'loading',
+      data: null,
+      error: null,
+    })
+
+    const [structureResult, previewResult] = await Promise.all([
+      bridge.schema.getTableDetails({
+        schema: table.schema,
+        table: table.table,
+      }),
+      bridge.tables.preview({
+        schema: table.schema,
+        table: table.table,
+        limit: 100,
+        offset: 0,
+      }),
+    ])
+
+    if (loadId !== tableLoadIdRef.current) {
+      return
+    }
+
+    if (structureResult.ok) {
+      setStructureState({
+        status: 'ready',
+        data: structureResult.data,
+        error: null,
+      })
+    } else {
+      setStructureState({
+        status: 'error',
+        data: null,
+        error: structureResult.error.message,
+      })
+    }
+
+    if (previewResult.ok) {
+      setPreviewState({
+        status: 'ready',
+        data: previewResult.data,
+        error: null,
+      })
+    } else {
+      setPreviewState({
+        status: 'error',
+        data: null,
+        error: previewResult.error.message,
+      })
+    }
   }
 
   if (isLoading) {
     return (
-      <section className="rowly-panel flex min-h-[560px] items-center justify-center">
-        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-          <RefreshCcw className="size-4 animate-spin" />
-          Loading local profiles and preferences…
-        </div>
+      <section className="rowly-workspace">
+        <WorkspaceState
+          tone="loading"
+          title="Loading workspace"
+          message="Reading saved sources, preferences and session state."
+        />
       </section>
     )
   }
 
   return (
-    <section className="grid min-h-[calc(100vh-48px)] grid-rows-[auto_1fr] gap-6">
-      <header className="rowly-toolbar">
-        <div className="flex items-center gap-3">
-          <div className="flex size-9 items-center justify-center rounded-lg border border-border bg-muted/50">
-            <Database className="size-4" />
-          </div>
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">Rowly</h1>
-            <p className="text-sm text-muted-foreground">
-              Local profile storage and PostgreSQL session bootstrap
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {(['light', 'dark', 'system'] as const).map((option) => (
-            <Button
-              key={option}
-              type="button"
-              variant={theme === option ? 'secondary' : 'outline'}
-              size="sm"
-              onClick={() => {
-                void setTheme(option)
-              }}
-            >
-              {themeButtonIcon(option)}
-              {option}
-            </Button>
-          ))}
-        </div>
-      </header>
-
-      <div
-        className="grid min-h-0 gap-6 xl:grid-cols-[minmax(240px,var(--sidebar-width))_minmax(0,1fr)]"
+    <section className="rowly-workspace">
+      <SidebarProvider
+        defaultOpen
+        className="min-h-0 flex-1 overflow-hidden"
         style={
           {
-            '--sidebar-width': `${preferences.panelWidths.sidebar}px`,
+            '--sidebar-width': `${sidebarWidth}px`,
           } as CSSProperties
-        }
-      >
-        <aside className="rowly-panel flex min-h-0 flex-col">
-          <div className="rowly-section-header">
-            <div>
-              <h2 className="text-sm font-semibold">Saved profiles</h2>
-              <p className="text-sm text-muted-foreground">
-                {profiles.length} stored locally
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={isSessionBusy}
-              onClick={() => {
-                void applyProfileSelection(null)
-              }}
-            >
-              <Plus className="size-4" />
-              New
-            </Button>
-          </div>
-
-          <div className="mt-4 flex min-h-0 flex-1 flex-col gap-2 overflow-auto">
-            {profiles.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
-                No profiles yet. Create one from the form to start storing
-                connection settings locally.
-              </div>
-            ) : null}
-
-            {profiles.map((profile) => {
-              const isSelected = profile.id === selectedProfileId
-              const sessionLabel = getProfileSessionLabel(profile.id, sessionState)
-              const hasActiveSessionLabel = sessionLabel !== 'Stored'
-
-              return (
-                <button
-                  key={profile.id}
+        }>
+        <Sidebar collapsible="offcanvas" className="rowly-shell-sidebar">
+          <SidebarHeader className="flex-row items-center justify-between px-3 py-2">
+            <span className="text-sm font-semibold tracking-tight text-sidebar-foreground">
+              Rowly
+            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
                   type="button"
-                  disabled={isSessionBusy}
-                  className={`rowly-list-item ${isSelected ? 'rowly-list-item-active' : ''}`}
+                  variant="ghost"
+                  size="icon-sm"
                   onClick={() => {
-                    void applyProfileSelection(profile)
-                  }}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-medium text-foreground">{profile.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {profile.user}@{profile.host}:{profile.port}
-                      </p>
-                    </div>
-                    <span
-                      className={`rowly-badge ${hasActiveSessionLabel ? 'rowly-badge-success' : ''}`}
-                    >
-                      {sessionLabel}
-                    </span>
-                  </div>
-                  <p className="mt-3 text-sm text-muted-foreground">
-                    {profile.database}
-                  </p>
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Updated {formatTimestamp(profile.updatedAt)}
-                  </p>
+                    openInstanceModal(null)
+                  }}>
+                  <Plus className="size-4" />
+                  <span className="sr-only">New PostgreSQL instance</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="right">New PostgreSQL instance</TooltipContent>
+            </Tooltip>
+          </SidebarHeader>
+
+          <div className="px-2 pb-2">
+            <Popover
+              open={isConnectionPopoverOpen}
+              onOpenChange={setIsConnectionPopoverOpen}>
+              <PopoverTrigger asChild>
+                <button type="button" className="rowly-connection-selector">
+                  <span
+                    className="rowly-status-dot shrink-0"
+                    data-status={
+                      targetMatchesSession(selectedTarget, sessionState)
+                        ? sessionState.status
+                        : 'stored'
+                    }
+                  />
+                  <span className="min-w-0 flex-1 truncate text-sm">
+                    {selectorLabel}
+                  </span>
+                  <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
                 </button>
-              )
-            })}
+              </PopoverTrigger>
+              <PopoverContent
+                side="bottom"
+                align="start"
+                className="rowly-connection-popover w-(--radix-popover-trigger-width)">
+                <div className="rowly-connection-groups">
+                  {instanceSources.length === 0 && manualSources.length === 0 ? (
+                    <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                      No saved PostgreSQL sources yet.
+                    </p>
+                  ) : null}
+
+                  {instanceSources.length > 0 ? (
+                    <div className="rowly-connection-group">
+                      <div className="rowly-connection-group-label">Instances</div>
+                      {instanceSources.map((source) => {
+                        const isExpanded = expandedInstances.has(source.id)
+                        const discovery = instanceDiscoveries[source.id]
+                        const isActiveInstance =
+                          sessionState.active?.sourceId === source.id &&
+                          sessionState.active?.sourceKind === 'instance'
+
+                        return (
+                          <div key={source.id} className="rowly-connection-instance">
+                            <div className="rowly-connection-instance-header">
+                              <button
+                                type="button"
+                                className="rowly-connection-option"
+                                data-active={
+                                  selectedTarget?.kind === 'instanceDatabase' &&
+                                  selectedTarget.sourceId === source.id
+                                    ? true
+                                    : undefined
+                                }
+                                onClick={() => {
+                                  void toggleInstanceExpansion(source)
+                                }}>
+                                {isExpanded ? (
+                                  <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+                                ) : (
+                                  <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                                )}
+                                <span
+                                  className="rowly-status-dot shrink-0"
+                                  data-status={
+                                    isActiveInstance ? sessionState.status : 'stored'
+                                  }
+                                />
+                                <span className="flex min-w-0 flex-1 flex-col">
+                                  <span className="truncate text-sm">{source.name}</span>
+                                  <span className="truncate text-[11px] text-muted-foreground">
+                                    {source.user}@{source.host}:{source.port}
+                                  </span>
+                                </span>
+                              </button>
+
+                              <button
+                                type="button"
+                                className="rowly-connection-icon-action"
+                                onClick={() => {
+                                  setIsConnectionPopoverOpen(false)
+                                  openInstanceModal(source)
+                                }}>
+                                <Pencil className="size-3.5" />
+                                <span className="sr-only">Edit instance</span>
+                              </button>
+                            </div>
+
+                            {isExpanded ? (
+                              <div className="rowly-connection-submenu">
+                                {discovery ? (
+                                  discovery.databases.length > 0 ? (
+                                    discovery.databases.map((database) => {
+                                      const isSelected =
+                                        selectedTarget?.kind === 'instanceDatabase' &&
+                                        selectedTarget.sourceId === source.id &&
+                                        selectedTarget.database === database.name
+                                      const isActiveDatabase =
+                                        sessionState.active?.sourceId === source.id &&
+                                        sessionState.active?.sourceKind === 'instance' &&
+                                        sessionState.active.database === database.name
+
+                                      return (
+                                        <button
+                                          key={database.name}
+                                          type="button"
+                                          className="rowly-connection-option rowly-connection-child"
+                                          data-active={isSelected || undefined}
+                                          onClick={() => {
+                                            void connectToInstanceDatabase(
+                                              source,
+                                              database.name
+                                            )
+                                          }}>
+                                          <span
+                                            className="rowly-status-dot shrink-0"
+                                            data-status={
+                                              isActiveDatabase
+                                                ? sessionState.status
+                                                : 'stored'
+                                            }
+                                          />
+                                          <span className="min-w-0 flex-1 truncate text-sm">
+                                            {database.name}
+                                          </span>
+                                          {isSelected ? (
+                                            <Check className="size-3.5 shrink-0 text-primary" />
+                                          ) : null}
+                                        </button>
+                                      )
+                                    })
+                                  ) : (
+                                    <p className="px-8 py-2 text-xs text-muted-foreground">
+                                      No connectable user databases found.
+                                    </p>
+                                  )
+                                ) : (
+                                  <p className="px-8 py-2 text-xs text-muted-foreground">
+                                    Expand again after unlocking this instance to load
+                                    its databases.
+                                  </p>
+                                )}
+                              </div>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : null}
+                  {manualSources.length > 0 ? (
+                    <div className="rowly-connection-group">
+                      <div className="rowly-connection-group-label">
+                        Manual databases
+                      </div>
+                      {manualSources.map((source) => {
+                        const isSelected =
+                          selectedTarget?.kind === 'manual' &&
+                          selectedTarget.sourceId === source.id
+                        const isActiveSession =
+                          sessionState.active?.sourceId === source.id &&
+                          sessionState.active?.sourceKind === 'manual'
+
+                        return (
+                          <div key={source.id} className="rowly-connection-instance-header">
+                            <button
+                              type="button"
+                              className="rowly-connection-option"
+                              data-active={isSelected || undefined}
+                              onClick={() => {
+                                handleManualSelect(source)
+                              }}>
+                              <span
+                                className="rowly-status-dot shrink-0"
+                                data-status={
+                                  isActiveSession ? sessionState.status : 'stored'
+                                }
+                              />
+                              <span className="flex min-w-0 flex-1 flex-col">
+                                <span className="truncate text-sm">{source.name}</span>
+                                <span className="truncate text-[11px] text-muted-foreground">
+                                  {source.database}@{source.host}
+                                </span>
+                              </span>
+                              {isSelected ? (
+                                <Check className="size-3.5 shrink-0 text-primary" />
+                              ) : null}
+                            </button>
+
+                            <button
+                              type="button"
+                              className="rowly-connection-icon-action"
+                              onClick={() => {
+                                setIsConnectionPopoverOpen(false)
+                                openManualModal(source)
+                              }}>
+                              <Pencil className="size-3.5" />
+                              <span className="sr-only">Edit manual connection</span>
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+
+                <Separator className="my-2" />
+                <div className="flex flex-col">
+                  <button
+                    type="button"
+                    className="rowly-connection-action"
+                    onClick={() => {
+                      setIsConnectionPopoverOpen(false)
+                      openInstanceModal(null)
+                    }}>
+                    <Server className="size-3.5" />
+                    <span>Add PostgreSQL instance</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="rowly-connection-action"
+                    onClick={() => {
+                      setIsConnectionPopoverOpen(false)
+                      openManualModal(null)
+                    }}>
+                    <Database className="size-3.5" />
+                    <span>Add manual database connection</span>
+                  </button>
+                  {sessionState.status === 'connected' ? (
+                    <button
+                      type="button"
+                      className="rowly-connection-action text-destructive"
+                      onClick={() => {
+                        setIsConnectionPopoverOpen(false)
+                        void handleDisconnect()
+                      }}>
+                      <Unplug className="size-3.5" />
+                      <span>Disconnect</span>
+                    </button>
+                  ) : null}
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
-        </aside>
+
+          <SidebarSeparator />
+
+          <SidebarContent className="overflow-hidden">
+            <SchemaExplorerPanel
+              sessionState={sessionState}
+              selectedTable={selectedTable}
+              onSelectTable={(table) => {
+                setActiveWorkspaceTab('table')
+                setActiveInspectorTab('data')
+                void loadTableData(table)
+              }}
+            />
+          </SidebarContent>
+        </Sidebar>
 
         <div
-          className="grid min-h-0 gap-6 2xl:grid-cols-[minmax(0,1fr)_minmax(280px,var(--secondary-panel-width))]"
-          style={
-            {
-              '--secondary-panel-width': `${preferences.panelWidths.secondaryPanel}px`,
-            } as CSSProperties
-          }
-        >
-          <section className="rowly-panel min-h-0">
-            <div className="rowly-section-header">
-              <div>
-                <h2 className="text-sm font-semibold">
-                  {selectedProfile ? 'Profile details' : 'Create profile'}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  Password is never persisted and is required only for test or
-                  connect.
-                </p>
-              </div>
-              {selectedProfile ? (
-                <span className="rowly-badge">
-                  Created {formatTimestamp(selectedProfile.createdAt)}
-                </span>
-              ) : null}
-            </div>
+          className="rowly-resize-handle"
+          onMouseDown={handleSidebarResizeStart}
+        />
 
-            <div className={`rowly-notice mt-4 ${noticeClassName(notice.tone)}`}>
-              {notice.text}
-            </div>
-
-            <form
-              className="mt-6 grid gap-5"
-              onSubmit={(event) => {
-                event.preventDefault()
-                void handleSave()
-              }}
-            >
-              <div className="grid gap-4 md:grid-cols-2">
-                <label className="rowly-field">
-                  <span>Name</span>
-                  <input
-                    className="rowly-input"
-                    disabled={isSessionBusy}
-                    value={draft.name}
-                    onChange={(event) => {
-                      handleDraftChange('name', event.target.value)
-                    }}
-                    placeholder="Production analytics"
-                  />
-                </label>
-
-                <label className="rowly-field">
-                  <span>Host</span>
-                  <input
-                    className="rowly-input"
-                    disabled={isSessionBusy}
-                    value={draft.host}
-                    onChange={(event) => {
-                      handleDraftChange('host', event.target.value)
-                    }}
-                    placeholder="db.internal"
-                  />
-                </label>
-
-                <label className="rowly-field">
-                  <span>Port</span>
-                  <input
-                    className="rowly-input"
-                    type="number"
-                    min={1}
-                    max={65535}
-                    disabled={isSessionBusy}
-                    value={draft.port}
-                    onChange={(event) => {
-                      const nextValue = Number.parseInt(event.target.value, 10)
-                      handleDraftChange('port', Number.isNaN(nextValue) ? 0 : nextValue)
-                    }}
-                  />
-                </label>
-
-                <label className="rowly-field">
-                  <span>Database</span>
-                  <input
-                    className="rowly-input"
-                    disabled={isSessionBusy}
-                    value={draft.database}
-                    onChange={(event) => {
-                      handleDraftChange('database', event.target.value)
-                    }}
-                    placeholder="postgres"
-                  />
-                </label>
-
-                <label className="rowly-field">
-                  <span>User</span>
-                  <input
-                    className="rowly-input"
-                    disabled={isSessionBusy}
-                    value={draft.user}
-                    onChange={(event) => {
-                      handleDraftChange('user', event.target.value)
-                    }}
-                    placeholder="postgres"
-                  />
-                </label>
-
-                <label className="rowly-field">
-                  <span>Password</span>
-                  <input
-                    className="rowly-input"
-                    type="password"
-                    disabled={isSessionBusy}
-                    value={password}
-                    onChange={(event) => {
-                      setPassword(event.target.value)
-                    }}
-                    placeholder="Used only for test and connect"
-                  />
-                </label>
+        <SidebarInset className="rowly-main-shell">
+          <header className="rowly-topbar">
+            <div className="flex items-center gap-3">
+              <div className="md:hidden">
+                <SidebarTrigger />
               </div>
 
-              <label className="rowly-checkbox">
-                <input
-                  type="checkbox"
-                  disabled={isSessionBusy}
-                  checked={draft.ssl}
-                  onChange={(event) => {
-                    handleDraftChange('ssl', event.target.checked)
-                  }}
+              <div className="flex items-center gap-2 text-sm">
+                <span
+                  className="rowly-status-dot"
+                  data-status={sessionState.status}
                 />
-                <span>Use simple SSL</span>
-              </label>
+                <span className="font-medium text-foreground">
+                  {activeSourceName ?? 'Not connected'}
+                </span>
+                {session?.database ? (
+                  <>
+                    <span className="text-muted-foreground">/</span>
+                    <span className="text-muted-foreground">{session.database}</span>
+                  </>
+                ) : null}
+              </div>
+            </div>
 
-              {validationMessage ? (
-                <p className="text-sm text-destructive">{validationMessage}</p>
-              ) : null}
-
-              <div className="flex flex-wrap gap-2">
+            <div className="rowly-theme-switcher">
+              {(['light', 'dark', 'system'] as const).map((option) => (
                 <Button
-                  type="submit"
-                  disabled={!canSave || pendingAction !== null || isSessionBusy}
-                >
-                  <Save className="size-4" />
-                  {pendingAction === 'save'
-                    ? 'Saving...'
-                    : selectedProfile
-                      ? 'Save changes'
-                      : 'Save profile'}
-                </Button>
-
-                <Button
+                  key={option}
                   type="button"
-                  variant="outline"
-                  disabled={!canTest || pendingAction !== null || isSessionBusy}
+                  variant={theme === option ? 'secondary' : 'outline'}
+                  size="icon-sm"
                   onClick={() => {
-                    void handleTestConnection()
-                  }}
-                >
-                  <Play className="size-4" />
-                  {pendingAction === 'test' ? 'Testing...' : 'Test connection'}
+                    void setTheme(option)
+                  }}>
+                  {themeButtonIcon(option)}
+                  <span className="sr-only">Set {option} theme</span>
                 </Button>
+              ))}
+            </div>
+          </header>
 
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={!canConnect}
-                  onClick={() => {
-                    void handleConnect()
-                  }}
-                >
-                  <PlugZap className="size-4" />
-                  {sessionState.status === 'connecting' ? 'Connecting...' : 'Connect'}
-                </Button>
+          <div className="rowly-main-notices">
+            {sessionState.error ? (
+              <Alert variant="destructive">
+                <AlertCircle />
+                <AlertTitle>Session error</AlertTitle>
+                <AlertDescription>
+                  {formatSessionError(sessionState.error)}
+                </AlertDescription>
+              </Alert>
+            ) : null}
 
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={sessionState.status !== 'connected'}
-                  onClick={() => {
-                    void handleDisconnect()
-                  }}
-                >
-                  <Unplug className="size-4" />
-                  Disconnect
-                </Button>
+            {notice ? (
+              <Alert variant={noticeAlertVariant(notice.tone)}>
+                {noticeAlertIcon(notice.tone)}
+                <AlertTitle>Workspace notice</AlertTitle>
+                <AlertDescription>{notice.text}</AlertDescription>
+              </Alert>
+            ) : null}
+          </div>
 
-                <Button
-                  type="button"
-                  variant="destructive"
-                  disabled={selectedProfile === null || pendingAction !== null || isSessionBusy}
-                  onClick={() => {
-                    void handleDelete()
-                  }}
-                >
-                  <Trash2 className="size-4" />
-                  {pendingAction === 'delete' ? 'Deleting...' : 'Delete'}
-                </Button>
+          {sources.length === 0 ? (
+            <div className="rowly-main-empty">
+              <WorkspaceState
+                title="Add your first PostgreSQL source"
+                message="Save an instance to discover all visible databases automatically, or keep using a manual database connection when you need a one-off profile."
+                action={
+                  <div className="rowly-inline-actions">
+                    <Button
+                      type="button"
+                      onClick={() => {
+                        openInstanceModal(null)
+                      }}>
+                      <Server data-icon="inline-start" />
+                      Add instance
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        openManualModal(null)
+                      }}>
+                      <Database data-icon="inline-start" />
+                      Add manual connection
+                    </Button>
+                  </div>
+                }
+              />
+            </div>
+          ) : (
+            <Tabs
+              value={activeWorkspaceTab}
+              onValueChange={(value) => {
+                setActiveWorkspaceTab(value as 'sql' | 'table')
+              }}
+              className="rowly-main-grid">
+              <div className="rowly-main-tabs">
+                <TabsList variant="line">
+                  <TabsTrigger value="sql">SQL runner</TabsTrigger>
+                  <TabsTrigger value="table" disabled={!selectedTable}>
+                    {selectedTable
+                      ? `Table · ${selectedTable.table}`
+                      : 'Table details'}
+                  </TabsTrigger>
+                </TabsList>
               </div>
 
-              {selectedProfile && isDirty ? (
-                <p className="text-sm text-muted-foreground">
-                  This draft differs from the stored profile. Save changes before
-                  connecting.
-                </p>
-              ) : null}
-            </form>
-          </section>
+              <div className="rowly-main-stack">
+                {activeWorkspaceTab === 'sql' ? (
+                  <SqlEditorPanel
+                    sessionState={sessionState}
+                    selectedTable={selectedTable}
+                    sqlDraft={sqlDraft}
+                    onSqlDraftChange={setSqlDraft}
+                    onInsertSelectedTable={() => {
+                      if (!selectedTable) {
+                        return
+                      }
 
-          <aside className="flex min-h-0 flex-col gap-6">
-            <SchemaExplorerPanel sessionState={sessionState} />
+                      setSqlDraft(
+                        `select *\nfrom ${formatTableReference(selectedTable)}\nlimit 100;`
+                      )
+                    }}
+                  />
+                ) : (
+                  <TableInspectorPanel
+                    sessionState={sessionState}
+                    selectedTable={selectedTable}
+                    activeTab={activeInspectorTab}
+                    structureState={structureState}
+                    previewState={previewState}
+                    onTabChange={setActiveInspectorTab}
+                    onRefresh={() => {
+                      if (selectedTable) {
+                        void loadTableData(selectedTable)
+                      }
+                    }}
+                  />
+                )}
+              </div>
+            </Tabs>
+          )}
 
-            <section className="rowly-panel">
-              <div className="rowly-section-header">
-                <h2 className="text-sm font-semibold">Selection</h2>
-              </div>
-              <dl className="mt-4 space-y-4 text-sm">
-                <div>
-                  <dt className="text-muted-foreground">Selected profile</dt>
-                  <dd className="mt-1 font-medium">
-                    {selectedProfile?.name ?? 'No saved profile selected'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Session status</dt>
-                  <dd className="mt-1 font-medium">
-                    {formatSessionStatus(sessionState.status)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Active session</dt>
-                  <dd className="mt-1 font-medium">
-                    {session
-                      ? `${activeProfileName ?? session.database} on ${session.host}`
-                      : 'No active session'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Theme</dt>
-                  <dd className="mt-1 font-medium capitalize">
-                    {theme} ({resolvedTheme})
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Last stored selection</dt>
-                  <dd className="mt-1 font-medium">
-                    {preferences.lastSelectedProfileId ? 'Available' : 'None'}
-                  </dd>
-                </div>
-              </dl>
-            </section>
+          <ConnectionModal
+            mode="manual"
+            isOpen={isManualModalOpen}
+            selectedSource={manualModalSource}
+            draft={manualDraft}
+            password={manualPassword}
+            validationMessage={manualValidationMessage}
+            notice={manualModalNotice}
+            actionNotice={manualActionNotice}
+            pendingAction={manualPendingAction}
+            isSessionBusy={isSessionBusy}
+            isDirty={isManualDirty}
+            canSave={canSaveManual}
+            canAction={canTestManual}
+            canConnect={canConnectManual}
+            onClose={closeManualModal}
+            onDraftChange={handleManualDraftChange}
+            onPasswordChange={setManualPassword}
+            onSave={() => {
+              void handleManualSave()
+            }}
+            onPrimaryAction={() => {
+              void handleManualTest()
+            }}
+            onConnect={() => {
+              void handleManualConnect()
+            }}
+            onDelete={() => {
+              void handleManualDelete()
+            }}
+            onDisconnect={() => {
+              void handleDisconnect()
+            }}
+            sessionConnected={sessionState.status === 'connected'}
+          />
 
-            <section className="rowly-panel">
-              <div className="rowly-section-header">
-                <h2 className="text-sm font-semibold">Session state</h2>
-              </div>
-              <div
-                className={`rowly-notice mt-4 ${
-                  noticeClassName(sessionStatusTone(sessionState.status))
-                }`}
-              >
-                {sessionState.status === 'connected'
-                  ? 'Exploration and query actions are available for the active session.'
-                  : sessionState.status === 'connecting'
-                    ? 'Opening PostgreSQL session from the main process.'
-                    : sessionState.status === 'error'
-                      ? 'The last connection attempt failed. Review the normalized error below.'
-                      : 'Exploration and query actions stay blocked until a valid session is connected.'}
-              </div>
-              <dl className="mt-4 space-y-4 text-sm">
-                <div>
-                  <dt className="text-muted-foreground">Normalized state</dt>
-                  <dd className="mt-1 font-medium">
-                    {formatSessionStatus(sessionState.status)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Last connection error</dt>
-                  <dd className="mt-1 font-medium">
-                    {formatSessionError(sessionState.error)}
-                  </dd>
-                </div>
-              </dl>
-            </section>
+          <ConnectionModal
+            mode="instance"
+            isOpen={isInstanceModalOpen}
+            selectedSource={instanceModalSource}
+            draft={instanceDraft}
+            password={instancePassword}
+            validationMessage={instanceValidationMessage}
+            notice={instanceModalNotice}
+            actionNotice={instanceActionNotice}
+            pendingAction={instancePendingAction}
+            isSessionBusy={false}
+            isDirty={isInstanceDirty}
+            canSave={canSaveInstance}
+            canAction={canDiscoverInstance}
+            onClose={closeInstanceModal}
+            onDraftChange={handleInstanceDraftChange}
+            onPasswordChange={setInstancePassword}
+            onSave={() => {
+              void handleInstanceSave()
+            }}
+            onPrimaryAction={() => {
+              void handleInstanceDiscoverFromModal()
+            }}
+            onDelete={() => {
+              void handleInstanceDelete()
+            }}
+            onDisconnect={() => {
+              void handleDisconnect()
+            }}
+            sessionConnected={sessionState.status === 'connected'}
+          />
 
-            <section className="rowly-panel">
-              <div className="rowly-section-header">
-                <h2 className="text-sm font-semibold">Connection check</h2>
-              </div>
-              <div
-                className={`rowly-notice mt-4 ${
-                  noticeClassName(connectionCheck?.tone ?? 'neutral')
-                }`}
-              >
-                {connectionCheck?.text ??
-                  'Run an independent connection test before opening a session.'}
-              </div>
-            </section>
-
-            <section className="rowly-panel">
-              <div className="rowly-section-header">
-                <h2 className="text-sm font-semibold">Runtime</h2>
-              </div>
-              <dl className="mt-4 space-y-4 text-sm">
-                <div>
-                  <dt className="text-muted-foreground">Version</dt>
-                  <dd className="mt-1 font-medium">
-                    {appInfo?.version ?? 'Unavailable'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Environment</dt>
-                  <dd className="mt-1 font-medium">
-                    {appInfo?.isPackaged ? 'Packaged app' : 'Development'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Platform</dt>
-                  <dd className="mt-1 font-medium">
-                    {appInfo?.platform ?? 'Unavailable'}
-                  </dd>
-                </div>
-              </dl>
-            </section>
-          </aside>
-        </div>
-      </div>
+          <InstancePasswordDialog
+            isOpen={passwordDialogIntent !== null}
+            instanceName={passwordDialogSource?.name ?? null}
+            password={instancePasswordPrompt}
+            notice={instancePasswordPromptNotice}
+            isBusy={isPasswordPromptBusy}
+            onClose={closePasswordDialog}
+            onPasswordChange={setInstancePasswordPrompt}
+            onSubmit={() => {
+              void handlePasswordDialogSubmit()
+            }}
+          />
+        </SidebarInset>
+      </SidebarProvider>
     </section>
   )
 }
