@@ -163,6 +163,9 @@ export function registerIpcHandlers({
   registerNoArgHandler(IPC_CHANNELS.schema.listSchemas, () =>
     schemaService.listSchemas()
   )
+  registerNoArgHandler(IPC_CHANNELS.schema.getExplorerTree, () =>
+    schemaService.getExplorerTree()
+  )
   registerInputHandler(
     IPC_CHANNELS.schema.listTables,
     listTablesRequestSchema,

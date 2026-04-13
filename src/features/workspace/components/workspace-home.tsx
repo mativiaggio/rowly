@@ -29,6 +29,7 @@ import type {
 import type { AppInfo } from '@shared/contracts/system'
 import type { AppError } from '@shared/lib/errors'
 import { Button } from '@components/ui/button'
+import { SchemaExplorerPanel } from '@features/workspace/components/schema-explorer-panel'
 import { useTheme } from '@hooks/use-theme'
 import { rendererLogger } from '@lib/logger'
 import { getRowlyBridge } from '@lib/rowly'
@@ -960,6 +961,8 @@ export function WorkspaceHome() {
           </section>
 
           <aside className="flex min-h-0 flex-col gap-6">
+            <SchemaExplorerPanel sessionState={sessionState} />
+
             <section className="rowly-panel">
               <div className="rowly-section-header">
                 <h2 className="text-sm font-semibold">Selection</h2>

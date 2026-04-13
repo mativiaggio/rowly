@@ -53,6 +53,8 @@ const rowlyBridge: RowlyBridge = {
     },
   },
   schema: {
+    getExplorerTree: () =>
+      ipcRenderer.invoke(IPC_CHANNELS.schema.getExplorerTree),
     listSchemas: () => ipcRenderer.invoke(IPC_CHANNELS.schema.listSchemas),
     listTables: (request) =>
       ipcRenderer.invoke(IPC_CHANNELS.schema.listTables, request),

@@ -15,6 +15,7 @@ import type {
 } from './query.js'
 import type {
   ListTablesRequest,
+  SchemaExplorerTree,
   SchemaSummary,
   TableDetails,
   TableDetailsRequest,
@@ -55,6 +56,7 @@ export const IPC_CHANNELS = {
     stateChanged: 'session:state-changed',
   },
   schema: {
+    getExplorerTree: 'schema:get-explorer-tree',
     listSchemas: 'schema:list-schemas',
     listTables: 'schema:list-tables',
     getTableDetails: 'schema:get-table-details',
@@ -100,6 +102,7 @@ export type RowlyBridge = {
     onStateChanged: (listener: SessionStateListener) => () => void
   }
   schema: {
+    getExplorerTree: () => Promise<IpcResult<SchemaExplorerTree>>
     listSchemas: () => Promise<IpcResult<SchemaSummary[]>>
     listTables: (
       request: ListTablesRequest

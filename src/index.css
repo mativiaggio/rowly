@@ -228,4 +228,52 @@ body {
   .rowly-badge-success {
     @apply border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300;
   }
+
+  .rowly-badge-key {
+    @apply gap-1 border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300;
+  }
+
+  .rowly-empty-state {
+    @apply flex items-center justify-center rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground;
+  }
+
+  .rowly-empty-state-danger {
+    @apply border-destructive/30 text-destructive;
+  }
+
+  .rowly-tree-scroll {
+    @apply min-h-0 space-y-2 overflow-auto;
+  }
+
+  .rowly-tree-group {
+    @apply rounded-lg border border-border bg-background p-2;
+  }
+
+  .rowly-tree-row {
+    @apply flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/60;
+  }
+
+  .rowly-tree-row-schema {
+    @apply font-medium text-foreground;
+  }
+
+  .rowly-tree-row-table {
+    @apply ml-5 text-foreground;
+  }
+
+  .rowly-tree-children {
+    @apply ml-10 mt-1 space-y-2 border-l border-border pl-3;
+  }
+
+  .rowly-tree-inline-state {
+    @apply py-2 text-sm text-muted-foreground;
+  }
+
+  .rowly-column-row {
+    @apply rounded-md border border-border bg-card px-3 py-2;
+  }
+
+  .rowly-column-meta {
+    @apply mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground;
+  }
 }

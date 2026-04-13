@@ -12,6 +12,7 @@ type SchemaServiceDependencies = {
 }
 
 export type SchemaService = {
+  getExplorerTree: () => ReturnType<PostgresDriver['getExplorerTree']>
   listSchemas: () => ReturnType<PostgresDriver['listSchemas']>
   listTables: (
     request: ListTablesRequest
@@ -36,6 +37,9 @@ export function createSchemaService({
   }
 
   return {
+    async getExplorerTree() {
+      return postgresDriver.getExplorerTree(getActiveSession())
+    },
     async listSchemas() {
       return postgresDriver.listSchemas(getActiveSession())
     },
