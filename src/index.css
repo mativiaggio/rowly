@@ -109,13 +109,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  background:
-    radial-gradient(
-      circle at top,
-      color-mix(in oklch, var(--app-panel-contrast) 55%, transparent) 0%,
-      transparent 38%
-    ),
-    linear-gradient(var(--app-shell), var(--app-shell));
+  background: linear-gradient(var(--app-shell), var(--app-shell));
 }
 
 #root {
@@ -183,5 +177,55 @@ body {
   html,
   body {
     min-height: 100%;
+  }
+}
+
+@layer components {
+  .rowly-panel {
+    @apply rounded-xl border border-border bg-card p-5;
+  }
+
+  .rowly-toolbar {
+    @apply flex flex-col justify-between gap-4 rounded-xl border border-border bg-card px-5 py-4 md:flex-row md:items-center;
+  }
+
+  .rowly-section-header {
+    @apply flex flex-wrap items-start justify-between gap-3;
+  }
+
+  .rowly-field {
+    @apply flex flex-col gap-2 text-sm font-medium text-foreground;
+  }
+
+  .rowly-input {
+    @apply h-10 rounded-lg border border-input bg-background px-3 text-sm font-normal text-foreground transition-colors placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/30;
+  }
+
+  .rowly-checkbox {
+    @apply flex items-center gap-3 text-sm font-medium text-foreground;
+  }
+
+  .rowly-checkbox input {
+    @apply size-4 rounded border-input accent-primary;
+  }
+
+  .rowly-notice {
+    @apply rounded-lg border px-3 py-2 text-sm;
+  }
+
+  .rowly-list-item {
+    @apply rounded-lg border border-border bg-background px-4 py-3 text-left transition-colors hover:bg-muted/60;
+  }
+
+  .rowly-list-item-active {
+    @apply border-primary/40 bg-primary/5;
+  }
+
+  .rowly-badge {
+    @apply inline-flex items-center rounded-md border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground;
+  }
+
+  .rowly-badge-success {
+    @apply border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300;
   }
 }

@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import path from 'node:path'
 import electron from 'vite-plugin-electron/simple'
+import { notBundle } from 'vite-plugin-electron/plugin'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -14,6 +15,14 @@ export default defineConfig(({ command }) => ({
           electron({
             main: {
               entry: 'electron/main.ts',
+              vite: {
+                plugins: [notBundle()],
+                build: {
+                  rollupOptions: {
+                    external: ['pg'],
+                  },
+                },
+              },
             },
             preload: {
               input: path.join(__dirname, 'electron/preload.ts'),

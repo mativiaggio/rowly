@@ -11,6 +11,6 @@
     "declaration": false,
     "noEmit": false
   },
-  "include": ["electron/**/*.ts"],
+  "include": ["electron/**/*.ts", "electron/*.ts"],
   "exclude": ["electron/electron-env.d.ts"]
 }

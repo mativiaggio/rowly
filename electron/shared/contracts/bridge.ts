@@ -3,6 +3,7 @@ import type {
   ConnectionTestRequest,
   ConnectionTestResult,
   StoredConnectionProfile,
+  UpdateConnectionProfileRequest,
 } from './connections.js'
 import type {
   AppPreferences,
@@ -22,6 +23,7 @@ import type {
 import type {
   ConnectionSession,
   SessionConnectRequest,
+  SessionSnapshot,
 } from './session.js'
 import type { AppInfo } from './system.js'
 import type {
@@ -41,13 +43,16 @@ export const IPC_CHANNELS = {
   connections: {
     list: 'connections:list',
     save: 'connections:save',
+    update: 'connections:update',
     remove: 'connections:remove',
     test: 'connections:test',
   },
   session: {
     getActive: 'session:get-active',
+    getState: 'session:get-state',
     connect: 'session:connect',
     disconnect: 'session:disconnect',
+    stateChanged: 'session:state-changed',
   },
   schema: {
     listSchemas: 'schema:list-schemas',
@@ -62,6 +67,8 @@ export const IPC_CHANNELS = {
   },
 } as const
 
+export type SessionStateListener = (snapshot: SessionSnapshot) => void
+
 export type RowlyBridge = {
   system: {
     getAppInfo: () => Promise<IpcResult<AppInfo>>
@@ -75,6 +82,9 @@ export type RowlyBridge = {
     save: (
       draft: ConnectionProfileDraft
     ) => Promise<IpcResult<StoredConnectionProfile>>
+    update: (
+      request: UpdateConnectionProfileRequest
+    ) => Promise<IpcResult<StoredConnectionProfile>>
     remove: (profileId: string) => Promise<IpcResult<StoredConnectionProfile>>
     test: (
       request: ConnectionTestRequest
@@ -82,10 +92,12 @@ export type RowlyBridge = {
   }
   session: {
     getActive: () => Promise<IpcResult<ConnectionSession | null>>
+    getState: () => Promise<IpcResult<SessionSnapshot>>
     connect: (
       request: SessionConnectRequest
     ) => Promise<IpcResult<ConnectionSession>>
     disconnect: () => Promise<IpcResult<null>>
+    onStateChanged: (listener: SessionStateListener) => () => void
   }
   schema: {
     listSchemas: () => Promise<IpcResult<SchemaSummary[]>>

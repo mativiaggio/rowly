@@ -6,6 +6,7 @@ import {
   connectionProfileDraftSchema,
   connectionProfileIdSchema,
   connectionTestRequestSchema,
+  updateConnectionProfileRequestSchema,
 } from '../shared/contracts/connections.js'
 import { appPreferencesPatchSchema } from '../shared/contracts/preferences.js'
 import { executeQueryRequestSchema } from '../shared/contracts/query.js'
@@ -15,38 +16,32 @@ import {
 } from '../shared/contracts/schema.js'
 import { sessionConnectRequestSchema } from '../shared/contracts/session.js'
 import { tablePreviewRequestSchema } from '../shared/contracts/tables.js'
-import {
-  toAppError,
-  validationError,
-} from '../shared/lib/errors.js'
-import { fail, ok } from '../shared/lib/result.js'
+import { toAppError, validationError } from '../shared/lib/errors.js'
 import { createLogger } from '../shared/lib/logger.js'
-import { createConnectionStore } from './connection-store.js'
-import { createPostgresDriver } from './postgres-driver.js'
-import { preferencesStore } from './preferences-store.js'
-import { createQueryService } from './query-service.js'
-import { createSchemaService } from './schema-service.js'
-import { createSessionManager } from './session-manager.js'
+import { fail, ok } from '../shared/lib/result.js'
+import type { MainRuntime } from './runtime.js'
 
 const logger = createLogger({
   scope: 'ipc',
   enableDebug: !app.isPackaged,
 })
 
-const connectionStore = createConnectionStore()
-const postgresDriver = createPostgresDriver()
-const sessionManager = createSessionManager({
-  connectionStore,
-  postgresDriver,
-})
-const schemaService = createSchemaService({
-  postgresDriver,
-  sessionManager,
-})
-const queryService = createQueryService({
-  postgresDriver,
-  sessionManager,
-})
+function redactSensitive(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactSensitive(entry))
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entryValue]) => [
+        key,
+        /password|secret/i.test(key) ? '[REDACTED]' : redactSensitive(entryValue),
+      ])
+    )
+  }
+
+  return value
+}
 
 function registerNoArgHandler<TOutput>(
   channel: string,
@@ -85,14 +80,21 @@ function registerInputHandler<TInput, TOutput>(
       logger.error('IPC request failed.', {
         channel,
         error,
-        payload,
+        payload: redactSensitive(payload),
       })
       return fail(toAppError(error, 'IPC_ERROR'))
     }
   })
 }
 
-export function registerIpcHandlers() {
+export function registerIpcHandlers({
+  connectionStore,
+  preferencesStore,
+  postgresDriver,
+  sessionManager,
+  schemaService,
+  queryService,
+}: MainRuntime) {
   registerNoArgHandler(IPC_CHANNELS.system.getAppInfo, () => ({
     name: app.getName(),
     version: app.getVersion(),
@@ -114,9 +116,28 @@ export function registerIpcHandlers() {
     (draft) => connectionStore.save(draft)
   )
   registerInputHandler(
+    IPC_CHANNELS.connections.update,
+    updateConnectionProfileRequestSchema,
+    (request) => connectionStore.update(request)
+  )
+  registerInputHandler(
     IPC_CHANNELS.connections.remove,
     connectionProfileIdSchema,
-    (profileId) => connectionStore.remove(profileId)
+    async (profileId) => {
+      if (sessionManager.getState().active?.profileId === profileId) {
+        await sessionManager.disconnect()
+      }
+
+      const removedProfile = connectionStore.remove(profileId)
+
+      if (preferencesStore.get().lastSelectedProfileId === profileId) {
+        preferencesStore.set({
+          lastSelectedProfileId: null,
+        })
+      }
+
+      return removedProfile
+    }
   )
   registerInputHandler(
     IPC_CHANNELS.connections.test,
@@ -126,6 +147,9 @@ export function registerIpcHandlers() {
 
   registerNoArgHandler(IPC_CHANNELS.session.getActive, () =>
     sessionManager.getActive()
+  )
+  registerNoArgHandler(IPC_CHANNELS.session.getState, () =>
+    sessionManager.getState()
   )
   registerInputHandler(
     IPC_CHANNELS.session.connect,

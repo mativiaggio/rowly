@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 import {
   IPC_CHANNELS,
   type RowlyBridge,
+  type SessionStateListener,
 } from '../shared/contracts/bridge.js'
 import { createLogger } from '../shared/lib/logger.js'
 
@@ -22,14 +23,34 @@ const rowlyBridge: RowlyBridge = {
   connections: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.connections.list),
     save: (draft) => ipcRenderer.invoke(IPC_CHANNELS.connections.save, draft),
+    update: (request) =>
+      ipcRenderer.invoke(IPC_CHANNELS.connections.update, request),
     remove: (profileId) =>
       ipcRenderer.invoke(IPC_CHANNELS.connections.remove, profileId),
     test: (request) => ipcRenderer.invoke(IPC_CHANNELS.connections.test, request),
   },
   session: {
     getActive: () => ipcRenderer.invoke(IPC_CHANNELS.session.getActive),
+    getState: () => ipcRenderer.invoke(IPC_CHANNELS.session.getState),
     connect: (request) => ipcRenderer.invoke(IPC_CHANNELS.session.connect, request),
     disconnect: () => ipcRenderer.invoke(IPC_CHANNELS.session.disconnect),
+    onStateChanged: (listener: SessionStateListener) => {
+      const handleStateChanged = (
+        _event: Electron.IpcRendererEvent,
+        snapshot: Parameters<SessionStateListener>[0]
+      ) => {
+        listener(snapshot)
+      }
+
+      ipcRenderer.on(IPC_CHANNELS.session.stateChanged, handleStateChanged)
+
+      return () => {
+        ipcRenderer.removeListener(
+          IPC_CHANNELS.session.stateChanged,
+          handleStateChanged
+        )
+      }
+    },
   },
   schema: {
     listSchemas: () => ipcRenderer.invoke(IPC_CHANNELS.schema.listSchemas),

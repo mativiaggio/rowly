@@ -3,8 +3,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow } from 'electron'
 
+import { IPC_CHANNELS } from '../shared/contracts/bridge.js'
 import { createLogger } from '../shared/lib/logger.js'
 import { registerIpcHandlers } from './ipc.js'
+import { createMainRuntime, type MainRuntime } from './runtime.js'
 
 const logger = createLogger({
   scope: 'main',
@@ -15,13 +17,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const VITE_DEV_SERVER_URL = process.env['VITE_DEV_SERVER_URL']
 
 let mainWindow: BrowserWindow | null = null
+let isQuitting = false
+let runtime: MainRuntime | null = null
 
 function resolvePreloadPath() {
   const preloadCandidates = [
     path.join(__dirname, 'preload.mjs'),
     path.join(__dirname, 'preload.js'),
+    path.join(__dirname, '..', 'preload.js'),
+    path.join(__dirname, '..', 'preload.mjs'),
   ]
-  const fallbackPreloadPath = path.join(__dirname, 'preload.js')
+  const fallbackPreloadPath = path.join(__dirname, '..', 'preload.js')
 
   return preloadCandidates.find((candidate) => existsSync(candidate)) ?? fallbackPreloadPath
 }
@@ -67,6 +73,22 @@ function createWindow() {
   })
 }
 
+function broadcastSessionState() {
+  if (!runtime) {
+    return
+  }
+
+  const snapshot = runtime.sessionManager.getState()
+
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) {
+      continue
+    }
+
+    window.webContents.send(IPC_CHANNELS.session.stateChanged, snapshot)
+  }
+}
+
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
@@ -79,8 +101,31 @@ app.on('activate', () => {
   }
 })
 
+app.on('before-quit', (event) => {
+  if (isQuitting) {
+    return
+  }
+
+  isQuitting = true
+  event.preventDefault()
+
+  void (runtime?.sessionManager.shutdown() ?? Promise.resolve())
+    .catch((error) => {
+      logger.error('Failed to shutdown session manager cleanly.', {
+        error,
+      })
+    })
+    .finally(() => {
+      app.quit()
+    })
+})
+
 void app.whenReady().then(() => {
   logger.info('Starting Rowly main process bootstrap.')
-  registerIpcHandlers()
+  runtime = createMainRuntime()
+  registerIpcHandlers(runtime)
+  runtime.sessionManager.subscribe(() => {
+    broadcastSessionState()
+  })
   createWindow()
 })
