@@ -1,30 +1,94 @@
-# React + TypeScript + Vite
+# Rowly
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Rowly is an open source desktop SQL client focused on learning, simplicity, and developer experience. The current base is built with Electron, React, TypeScript, Tailwind CSS, and `shadcn/ui`, and is being evolved toward a PostgreSQL-first MVP.
 
-Currently, two official plugins are available:
+## Current Status
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react/README.md) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Stage 1 is focused on hardening the project foundation:
 
-## Expanding the ESLint configuration
+- Electron main, preload, renderer, and shared contracts are now separated by responsibility.
+- The renderer consumes a typed `window.rowly` bridge instead of raw `ipcRenderer`.
+- TypeScript, ESLint, and build scripts are structured to support future database features safely.
+- Global theming is already wired with light, dark, and system modes.
 
-If you are developing a production application, we recommend updating the configuration to enable type aware lint rules:
+## MVP Direction
 
-- Configure the top-level `parserOptions` property like this:
+The initial MVP will target:
 
-```js
-export default {
-  // other rules...
-  parserOptions: {
-    ecmaVersion: 'latest',
-    sourceType: 'module',
-    project: ['./tsconfig.json', './tsconfig.node.json'],
-    tsconfigRootDir: __dirname,
-  },
-}
+- PostgreSQL as the only database driver
+- Saved connection profiles without persisted passwords
+- Schema browsing
+- Table record previews
+- SQL execution with a warning before potentially mutating statements
+
+## Tech Stack
+
+- Desktop shell: Electron
+- Core language: TypeScript
+- Renderer: React
+- UI: Tailwind CSS v4 + `shadcn/ui`
+- Build tooling: Vite + `vite-plugin-electron`
+- Packaging: `electron-builder`
+
+## Project Structure
+
+```text
+electron/
+  main/        # Electron main-process bootstrap, IPC handlers, local runtime services
+  preload/     # Typed bridge exposed to the renderer
+  shared/      # Contracts, result/error helpers, and shared logging primitives
+
+src/
+  app/         # Renderer bootstrap, providers, and app shell
+  components/  # Shared UI components
+  features/    # Feature-oriented renderer modules
+  hooks/       # Renderer hooks
+  lib/         # Renderer-only utilities and integration helpers
 ```
 
-- Replace `plugin:@typescript-eslint/recommended` to `plugin:@typescript-eslint/recommended-type-checked` or `plugin:@typescript-eslint/strict-type-checked`
-- Optionally add `plugin:@typescript-eslint/stylistic-type-checked`
-- Install [eslint-plugin-react](https://github.com/jsx-eslint/eslint-plugin-react) and add `plugin:react/recommended` & `plugin:react/jsx-runtime` to the `extends` list
+## Local Setup
+
+### Requirements
+
+- Node.js 20+
+- npm 10+
+
+### Install
+
+```bash
+npm install
+```
+
+### Development
+
+```bash
+npm run dev
+```
+
+This starts Vite in development mode and launches the Electron app through `vite-plugin-electron`.
+
+## Available Scripts
+
+- `npm run dev`: start the desktop app in development mode
+- `npm run lint`: run ESLint across renderer, main, preload, and shared code
+- `npm run typecheck`: run TypeScript checks for renderer, Electron, and tooling configs
+- `npm run build:renderer`: build the renderer bundle into `dist/`
+- `npm run build:electron`: compile Electron main/preload code into `dist-electron/`
+- `npm run build`: run typecheck + renderer build + Electron build
+- `npm run package`: build the app and generate distributable artifacts with `electron-builder`
+
+## Packaging Notes
+
+`electron-builder` is configured for Windows, macOS, and Linux artifact generation. Code signing, notarization, and auto-update are not part of the current stage.
+
+## Scope of This Stage
+
+This stage does not yet include:
+
+- database drivers
+- connection storage flows
+- query execution
+- schema exploration
+- data editing
+
+Those arrive in the next implementation stages, on top of the typed bridge and hardened foundation introduced here.
