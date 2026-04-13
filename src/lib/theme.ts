@@ -1,6 +1,6 @@
 import { createContext } from 'react'
 
-import type { ThemePreference } from '@shared/contracts/app'
+import type { ThemePreference } from '@shared/contracts/preferences'
 
 export type ResolvedTheme = Exclude<ThemePreference, 'system'>
 

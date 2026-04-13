@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Database, Moon, Play, Sun, TableProperties } from 'lucide-react'
 
-import type { AppInfo } from '@shared/contracts/app'
+import type { AppInfo } from '@shared/contracts/system'
 import { Button } from '@components/ui/button'
 import { useTheme } from '@hooks/use-theme'
 import { getRowlyBridge } from '@lib/rowly'

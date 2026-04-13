@@ -3,14 +3,11 @@ import path from 'node:path'
 import { app } from 'electron'
 
 import {
-  isThemePreference,
-  type ThemePreference,
-} from '../shared/contracts/app.js'
+  appPreferencesSchema,
+  type AppPreferences,
+  type AppPreferencesPatch,
+} from '../shared/contracts/preferences.js'
 import { createLogger } from '../shared/lib/logger.js'
-
-type PreferencesFile = {
-  theme?: ThemePreference
-}
 
 const logger = createLogger({
   scope: 'main',
@@ -18,55 +15,61 @@ const logger = createLogger({
 })
 
 const PREFERENCES_FILE_NAME = 'preferences.json'
+const defaultPreferences: AppPreferences = {
+  theme: null,
+}
 
 function getPreferencesPath() {
   return path.join(app.getPath('userData'), PREFERENCES_FILE_NAME)
 }
 
-function readPreferences(): PreferencesFile {
+function readPreferences(): AppPreferences {
   const filePath = getPreferencesPath()
 
   if (!existsSync(filePath)) {
-    return {}
+    return defaultPreferences
   }
 
   try {
     const fileContents = readFileSync(filePath, 'utf-8')
-    const parsed = JSON.parse(fileContents) as PreferencesFile
+    const parsed = JSON.parse(fileContents) as unknown
+    const result = appPreferencesSchema.safeParse(parsed)
 
-    if (parsed.theme && !isThemePreference(parsed.theme)) {
-      logger.warn('Invalid stored theme preference detected, resetting store.')
-      return {}
+    if (!result.success) {
+      logger.warn('Invalid stored preferences detected, resetting store.', {
+        issues: result.error.flatten(),
+      })
+      return defaultPreferences
     }
 
-    return parsed
+    return result.data
   } catch (error) {
     logger.warn('Failed to read preferences file, using defaults.', {
       error,
     })
 
-    return {}
+    return defaultPreferences
   }
 }
 
-function writePreferences(preferences: PreferencesFile) {
+function writePreferences(preferences: AppPreferences) {
   const filePath = getPreferencesPath()
   mkdirSync(path.dirname(filePath), { recursive: true })
   writeFileSync(filePath, JSON.stringify(preferences, null, 2), 'utf-8')
 }
 
 export const preferencesStore = {
-  getTheme(): ThemePreference | null {
-    return readPreferences().theme ?? null
+  get(): AppPreferences {
+    return readPreferences()
   },
-  setTheme(theme: ThemePreference): ThemePreference {
+  set(patch: AppPreferencesPatch): AppPreferences {
     const currentPreferences = readPreferences()
-    const nextPreferences: PreferencesFile = {
+    const nextPreferences = appPreferencesSchema.parse({
       ...currentPreferences,
-      theme,
-    }
+      ...patch,
+    })
 
     writePreferences(nextPreferences)
-    return theme
+    return nextPreferences
   },
 }

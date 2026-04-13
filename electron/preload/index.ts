@@ -16,9 +16,33 @@ const rowlyBridge: RowlyBridge = {
     getAppInfo: () => ipcRenderer.invoke(IPC_CHANNELS.system.getAppInfo),
   },
   preferences: {
-    getTheme: () => ipcRenderer.invoke(IPC_CHANNELS.preferences.getTheme),
-    setTheme: (theme) =>
-      ipcRenderer.invoke(IPC_CHANNELS.preferences.setTheme, theme),
+    get: () => ipcRenderer.invoke(IPC_CHANNELS.preferences.get),
+    set: (patch) => ipcRenderer.invoke(IPC_CHANNELS.preferences.set, patch),
+  },
+  connections: {
+    list: () => ipcRenderer.invoke(IPC_CHANNELS.connections.list),
+    save: (draft) => ipcRenderer.invoke(IPC_CHANNELS.connections.save, draft),
+    remove: (profileId) =>
+      ipcRenderer.invoke(IPC_CHANNELS.connections.remove, profileId),
+    test: (request) => ipcRenderer.invoke(IPC_CHANNELS.connections.test, request),
+  },
+  session: {
+    getActive: () => ipcRenderer.invoke(IPC_CHANNELS.session.getActive),
+    connect: (request) => ipcRenderer.invoke(IPC_CHANNELS.session.connect, request),
+    disconnect: () => ipcRenderer.invoke(IPC_CHANNELS.session.disconnect),
+  },
+  schema: {
+    listSchemas: () => ipcRenderer.invoke(IPC_CHANNELS.schema.listSchemas),
+    listTables: (request) =>
+      ipcRenderer.invoke(IPC_CHANNELS.schema.listTables, request),
+    getTableDetails: (request) =>
+      ipcRenderer.invoke(IPC_CHANNELS.schema.getTableDetails, request),
+  },
+  tables: {
+    preview: (request) => ipcRenderer.invoke(IPC_CHANNELS.tables.preview, request),
+  },
+  query: {
+    execute: (request) => ipcRenderer.invoke(IPC_CHANNELS.query.execute, request),
   },
 }
 

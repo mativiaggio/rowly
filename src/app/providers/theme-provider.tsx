@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 
-import type { ThemePreference } from '@shared/contracts/app'
+import type { ThemePreference } from '@shared/contracts/preferences'
 import { getRowlyBridge } from '@lib/rowly'
 import {
   applyTheme,
@@ -20,7 +20,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     const bridge = getRowlyBridge()
 
     const loadInitialTheme = async () => {
-      const result = await bridge.preferences.getTheme()
+      const result = await bridge.preferences.get()
 
       if (!result.ok) {
         themeLogger.warn('Falling back to system theme after preferences error.', {
@@ -29,8 +29,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         return
       }
 
-      if (result.data) {
-        setThemeState(result.data)
+      if (result.data.theme) {
+        setThemeState(result.data.theme)
       }
     }
 
@@ -63,7 +63,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const setTheme = async (nextTheme: ThemePreference) => {
     setThemeState(nextTheme)
 
-    const result = await getRowlyBridge().preferences.setTheme(nextTheme)
+    const result = await getRowlyBridge().preferences.set({
+      theme: nextTheme,
+    })
 
     if (!result.ok) {
       themeLogger.warn('Failed to persist theme preference.', {
