@@ -1,4 +1,5 @@
 import { Database, Play, Save, Trash2, Unplug } from 'lucide-react'
+import type { ReactNode } from 'react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -7,7 +8,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -77,6 +77,26 @@ function noticeVariant(tone: Notice['tone']) {
   return tone === 'danger' ? 'destructive' : 'default'
 }
 
+function FormSection({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-3">
+        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.15em] text-muted-foreground">
+          {label}
+        </span>
+        <div className="h-px flex-1 bg-border" />
+      </div>
+      {children}
+    </div>
+  )
+}
+
 export function ConnectionModal(props: ConnectionModalProps) {
   const {
     isOpen,
@@ -95,22 +115,22 @@ export function ConnectionModal(props: ConnectionModalProps) {
 
   const isBusy = pendingAction !== null || isSessionBusy
   const isManual = props.mode === 'manual'
-  const modalTitle =
-    props.mode === 'manual'
-      ? props.selectedSource
-        ? 'Edit manual connection'
-        : 'Add manual connection'
-      : props.selectedSource
-        ? 'Edit PostgreSQL instance'
-        : 'Add PostgreSQL instance'
-  const modalDescription =
-    props.mode === 'manual'
-      ? props.selectedSource
-        ? 'Update the saved database profile or reconnect with a new password.'
-        : 'Create a PostgreSQL database profile. The password stays in memory only.'
-      : props.selectedSource
-        ? 'Update the saved instance and refresh database discovery with a password.'
-        : 'Create a PostgreSQL instance profile and discover its databases.'
+
+  const modalTitle = isManual
+    ? props.selectedSource
+      ? 'Edit manual connection'
+      : 'Add manual connection'
+    : props.selectedSource
+      ? 'Edit PostgreSQL instance'
+      : 'Add PostgreSQL instance'
+
+  const modalDescription = isManual
+    ? props.selectedSource
+      ? 'Update the saved database profile or reconnect with a new password.'
+      : 'Create a PostgreSQL database profile. The password stays in memory only.'
+    : props.selectedSource
+      ? 'Update the saved instance and refresh database discovery with a password.'
+      : 'Create a PostgreSQL instance profile and discover its databases.'
 
   return (
     <Dialog
@@ -119,8 +139,9 @@ export function ConnectionModal(props: ConnectionModalProps) {
         if (!open && !isBusy) {
           onClose()
         }
-      }}>
-      <DialogContent className="rowly-dialog-content sm:max-w-3xl">
+      }}
+    >
+      <DialogContent className="rowly-dialog-content sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{modalTitle}</DialogTitle>
           <DialogDescription>{modalDescription}</DialogDescription>
@@ -136,153 +157,142 @@ export function ConnectionModal(props: ConnectionModalProps) {
           ) : null}
 
           <form
-            className="grid gap-5"
+            className="flex flex-col gap-5"
             onSubmit={(event) => {
               event.preventDefault()
               props.onSave()
-            }}>
-            <div className="grid gap-4 md:grid-cols-2">
+            }}
+          >
+            {/* ── Profile ──────────────────────────────────── */}
+            <FormSection label="Profile">
               <label className="rowly-field" htmlFor="connection-name">
                 <span>Name</span>
                 <Input
                   id="connection-name"
                   disabled={isBusy}
                   value={props.draft.name}
-                  onChange={(event) => {
-                    props.onDraftChange('name', event.target.value)
-                  }}
+                  onChange={(e) => props.onDraftChange('name', e.target.value)}
+                  placeholder={isManual ? 'Production analytics' : 'Local PostgreSQL'}
+                />
+              </label>
+            </FormSection>
+
+            {/* ── Server ───────────────────────────────────── */}
+            <FormSection label="Server">
+              {/* Host + Port always together */}
+              <div className="grid grid-cols-[1fr_7rem] gap-3">
+                <label className="rowly-field" htmlFor="connection-host">
+                  <span>Host</span>
+                  <Input
+                    id="connection-host"
+                    disabled={isBusy}
+                    value={props.draft.host}
+                    onChange={(e) =>
+                      props.onDraftChange('host', e.target.value)
+                    }
+                    placeholder="localhost"
+                  />
+                </label>
+                <label className="rowly-field" htmlFor="connection-port">
+                  <span>Port</span>
+                  <Input
+                    id="connection-port"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    disabled={isBusy}
+                    value={props.draft.port}
+                    onChange={(e) => {
+                      const n = Number.parseInt(e.target.value, 10)
+                      props.onDraftChange('port', Number.isNaN(n) ? 0 : n)
+                    }}
+                  />
+                </label>
+              </div>
+
+              {/* Mode-specific server fields */}
+              {props.mode === 'manual' ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="rowly-field" htmlFor="connection-database">
+                    <span>Database</span>
+                    <Input
+                      id="connection-database"
+                      disabled={isBusy}
+                      value={props.draft.database}
+                      onChange={(e) =>
+                        props.onDraftChange('database', e.target.value)
+                      }
+                      placeholder="postgres"
+                    />
+                  </label>
+                  <label className="rowly-field" htmlFor="connection-user">
+                    <span>User</span>
+                    <Input
+                      id="connection-user"
+                      disabled={isBusy}
+                      value={props.draft.user}
+                      onChange={(e) =>
+                        props.onDraftChange('user', e.target.value)
+                      }
+                      placeholder="postgres"
+                    />
+                  </label>
+                </div>
+              ) : (
+                <label className="rowly-field" htmlFor="connection-user">
+                  <span>User</span>
+                  <Input
+                    id="connection-user"
+                    disabled={isBusy}
+                    value={props.draft.user}
+                    onChange={(e) =>
+                      props.onDraftChange('user', e.target.value)
+                    }
+                    placeholder="postgres"
+                  />
+                </label>
+              )}
+            </FormSection>
+
+            {/* ── Authentication ───────────────────────────── */}
+            <FormSection label="Authentication">
+              <label className="rowly-field" htmlFor="connection-password">
+                <span>Password</span>
+                <Input
+                  id="connection-password"
+                  type="password"
+                  disabled={isBusy}
+                  value={password}
+                  onChange={(e) => onPasswordChange(e.target.value)}
                   placeholder={
-                    isManual ? 'Production analytics' : 'Local PostgreSQL'
+                    isManual
+                      ? 'Kept in memory only — not persisted'
+                      : 'Used for discovery — not persisted'
                   }
                 />
               </label>
 
-              <label className="rowly-field" htmlFor="connection-host">
-                <span>Host</span>
-                <Input
-                  id="connection-host"
-                  disabled={isBusy}
-                  value={props.draft.host}
-                  onChange={(event) => {
-                    props.onDraftChange('host', event.target.value)
-                  }}
-                  placeholder="localhost"
-                />
-              </label>
+              {props.mode === 'instance' ? (
+                <p className="text-xs text-muted-foreground">
+                  Only host-level details are saved. The password is held in
+                  memory during this session for database discovery.
+                </p>
+              ) : null}
 
-              <label className="rowly-field" htmlFor="connection-port">
-                <span>Port</span>
-                <Input
-                  id="connection-port"
-                  type="number"
-                  min={1}
-                  max={65535}
+              <label className="rowly-checkbox" htmlFor="connection-ssl">
+                <Checkbox
+                  id="connection-ssl"
+                  checked={props.draft.ssl}
                   disabled={isBusy}
-                  value={props.draft.port}
-                  onChange={(event) => {
-                    const nextValue = Number.parseInt(event.target.value, 10)
-                    props.onDraftChange(
-                      'port',
-                      Number.isNaN(nextValue) ? 0 : nextValue
-                    )
+                  onCheckedChange={(checked) => {
+                    props.onDraftChange('ssl', checked === true)
                   }}
                 />
+                <span>Use simple SSL</span>
               </label>
+            </FormSection>
 
-              {isManual ? (
-                <label className="rowly-field" htmlFor="connection-database">
-                  <span>Database</span>
-                  <Input
-                    id="connection-database"
-                    disabled={isBusy}
-                    value={props.draft.database}
-                    onChange={(event) => {
-                      props.onDraftChange('database', event.target.value)
-                    }}
-                    placeholder="postgres"
-                  />
-                </label>
-              ) : (
-                <label className="rowly-field" htmlFor="connection-user">
-                  <span>User</span>
-                  <Input
-                    id="connection-user"
-                    disabled={isBusy}
-                    value={props.draft.user}
-                    onChange={(event) => {
-                      props.onDraftChange('user', event.target.value)
-                    }}
-                    placeholder="postgres"
-                  />
-                </label>
-              )}
-
-              {isManual ? (
-                <label className="rowly-field" htmlFor="connection-user">
-                  <span>User</span>
-                  <Input
-                    id="connection-user"
-                    disabled={isBusy}
-                    value={props.draft.user}
-                    onChange={(event) => {
-                      props.onDraftChange('user', event.target.value)
-                    }}
-                    placeholder="postgres"
-                  />
-                </label>
-              ) : (
-                <label className="rowly-field" htmlFor="connection-password">
-                  <span>Password</span>
-                  <Input
-                    id="connection-password"
-                    type="password"
-                    disabled={isBusy}
-                    value={password}
-                    onChange={(event) => {
-                      onPasswordChange(event.target.value)
-                    }}
-                    placeholder="Used only for discovery and connect"
-                  />
-                </label>
-              )}
-
-              {isManual ? (
-                <label className="rowly-field" htmlFor="connection-password">
-                  <span>Password</span>
-                  <Input
-                    id="connection-password"
-                    type="password"
-                    disabled={isBusy}
-                    value={password}
-                    onChange={(event) => {
-                      onPasswordChange(event.target.value)
-                    }}
-                    placeholder="Used only for test and connect"
-                  />
-                </label>
-              ) : (
-                <div className="rowly-field">
-                  <span>Discovery</span>
-                  <p className="text-sm text-muted-foreground">
-                    Saving the instance keeps only host-level details. Discovery
-                    uses the in-memory password for this app run.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            <label className="rowly-checkbox" htmlFor="connection-ssl">
-              <Checkbox
-                id="connection-ssl"
-                checked={props.draft.ssl}
-                disabled={isBusy}
-                onCheckedChange={(checked) => {
-                  props.onDraftChange('ssl', checked === true)
-                }}
-              />
-              <span>Use simple SSL</span>
-            </label>
-
+            {/* ── Inline alerts ────────────────────────────── */}
             {validationMessage ? (
               <Alert variant="destructive">
                 <Database />
@@ -303,12 +313,13 @@ export function ConnectionModal(props: ConnectionModalProps) {
 
             <Separator />
 
-            <DialogFooter className="rowly-dialog-footer">
+            {/* ── Footer ───────────────────────────────────── */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap gap-2">
                 <Button type="submit" disabled={!props.canSave || isBusy}>
                   <Save data-icon="inline-start" />
                   {pendingAction === 'save'
-                    ? 'Saving...'
+                    ? 'Saving…'
                     : props.selectedSource
                       ? 'Save changes'
                       : 'Save'}
@@ -318,14 +329,15 @@ export function ConnectionModal(props: ConnectionModalProps) {
                   type="button"
                   variant="outline"
                   disabled={!props.canAction || isBusy}
-                  onClick={props.onPrimaryAction}>
+                  onClick={props.onPrimaryAction}
+                >
                   <Play data-icon="inline-start" />
                   {props.mode === 'manual'
                     ? pendingAction === 'test'
-                      ? 'Testing...'
-                      : 'Test connection'
+                      ? 'Testing…'
+                      : 'Test'
                     : pendingAction === 'discover'
-                      ? 'Discovering...'
+                      ? 'Discovering…'
                       : 'Discover databases'}
                 </Button>
 
@@ -334,9 +346,10 @@ export function ConnectionModal(props: ConnectionModalProps) {
                     type="button"
                     variant="outline"
                     disabled={!props.canConnect || isBusy}
-                    onClick={props.onConnect}>
+                    onClick={props.onConnect}
+                  >
                     <Database data-icon="inline-start" />
-                    {isSessionBusy ? 'Connecting...' : 'Connect'}
+                    {isSessionBusy ? 'Connecting…' : 'Connect'}
                   </Button>
                 ) : null}
 
@@ -344,7 +357,8 @@ export function ConnectionModal(props: ConnectionModalProps) {
                   type="button"
                   variant="outline"
                   disabled={!sessionConnected || isBusy}
-                  onClick={onDisconnect}>
+                  onClick={onDisconnect}
+                >
                   <Unplug data-icon="inline-start" />
                   Disconnect
                 </Button>
@@ -355,25 +369,24 @@ export function ConnectionModal(props: ConnectionModalProps) {
                   type="button"
                   variant="destructive"
                   disabled={isBusy}
-                  onClick={onDelete}>
+                  onClick={onDelete}
+                >
                   <Trash2 data-icon="inline-start" />
-                  {pendingAction === 'delete' ? 'Deleting...' : 'Delete'}
+                  {pendingAction === 'delete' ? 'Deleting…' : 'Delete'}
                 </Button>
               ) : null}
-            </DialogFooter>
+            </div>
 
-            <Alert variant={noticeVariant(actionNotice?.tone ?? 'neutral')}>
-              <Database />
-              <AlertTitle>
-                {props.mode === 'manual' ? 'Connection check' : 'Discovery'}
-              </AlertTitle>
-              <AlertDescription>
-                {actionNotice?.text ??
-                  (props.mode === 'manual'
-                    ? 'Run a test or connect with the current draft after saving it.'
-                    : 'Save the instance and discover the databases that this user can access.')}
-              </AlertDescription>
-            </Alert>
+            {/* ── Action status ─────────────────────────────── */}
+            {actionNotice ? (
+              <Alert variant={noticeVariant(actionNotice.tone)}>
+                <Database />
+                <AlertTitle>
+                  {isManual ? 'Connection check' : 'Discovery'}
+                </AlertTitle>
+                <AlertDescription>{actionNotice.text}</AlertDescription>
+              </Alert>
+            ) : null}
           </form>
         </div>
       </DialogContent>
